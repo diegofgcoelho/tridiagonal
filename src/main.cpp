@@ -183,7 +183,7 @@ int main(){
 	//File name
 	char filename_usual[] = "measures_usual.txt";
 	//Printing the table measures_table
-	save_table(filename_usual, measures_table, n_sp_trid_n, 4, "%.0f%.0f%.3e%.3f", false);
+	save_table(filename_usual, measures_table, n_sp_trid_n, 4, "%.0f%.0f%.3e%.3f", true);
 
 	//Freeing all the allocated memory for printing the table
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
@@ -409,35 +409,81 @@ void save_table(char const* filename, double** table, unsigned size1, unsigned s
 	char tempformat[7];
 	int pos = 0;
 
-
-	//Part for printing in text format
-	for(unsigned i = 0; i < size1; i++){
-		//Resetting pos variable
-		pos = 0;
-		for(unsigned j = 0; j < size2; j++){
-			int fpos = format_string.find("%", pos+1);
-			//Checking if it is the last element in the column
-			if(fpos < 0){
-				//Copying the content in the format string to the temporary string to print
-				format_string.copy(tempformat, format_string.length()-pos, pos);
-				//Setting the end of the string for this particular element format
-				tempformat[format_string.length()-pos+1] = '\0';
-				//Print the element that is the last one in the column
-				fprintf(filep, tempformat, table[i][j]);
-			}else{
-				//Copying the content in the format string to the temporary string to print
-				tempformat_string = format_string.substr(pos, fpos-pos)+"\t";
-				tempformat_string.copy(tempformat, tempformat_string.length(), 0);
-				tempformat[tempformat_string.length()] = '\0';
-				//Update the position for the next element to be print
-				pos = fpos;
-				//Print the element
-				fprintf(filep, tempformat, table[i][j]);
+	if (latex==false) {
+		printf("\n\nPriting data in text format.\n\n");
+		//Part for printing in text format
+		for(unsigned i = 0; i < size1; i++){
+			//Resetting pos variable
+			pos = 0;
+			for(unsigned j = 0; j < size2; j++){
+				int fpos = format_string.find("%", pos+1);
+				//Checking if it is the last element in the column
+				if(fpos < 0){
+					//Copying the content in the format string to the temporary string to print
+					format_string.copy(tempformat, format_string.length()-pos, pos);
+					//Setting the end of the string for this particular element format
+					tempformat[format_string.length()-pos+1] = '\0';
+					//Print the element that is the last one in the column
+					fprintf(filep, tempformat, table[i][j]);
+				}else{
+					//Copying the content in the format string to the temporary string to print
+					tempformat_string = format_string.substr(pos, fpos-pos)+"\t";
+					tempformat_string.copy(tempformat, tempformat_string.length(), 0);
+					tempformat[tempformat_string.length()] = '\0';
+					//Update the position for the next element to be print
+					pos = fpos;
+					//Print the element
+					fprintf(filep, tempformat, table[i][j]);
+				}
 			}
+			fprintf(filep, "\n");
 		}
-		fprintf(filep, "\n");
-	}
+	} else {
+		printf("\n\nPriting data in latex format.\n\n");
+		//Printing in the latex format
+		fprintf(filep,"\% add the booktabs package in the main latex file\n");
+		fprintf(filep,"\\begin{table}\n");
+		fprintf(filep,"\\begin{center}\n");
+		fprintf(filep,"\\caption{write your caption here}\n");
+		fprintf(filep,"\\label{write your label here}\n");
+		fprintf(filep,"\\begin{tabular}{\n");
 
+
+		for(unsigned i = 0; i < size1; i++){
+				//Resetting pos variable
+				pos = 0;
+				for(unsigned j = 0; j < size2; j++){
+					int fpos = format_string.find("%", pos+1);
+					//Checking if it is the last element in the column
+					if(fpos < 0){
+						//Copying the content in the format string to the temporary string to print
+						format_string.copy(tempformat, format_string.length()-pos, pos);
+						//Setting the end of the string for this particular element format
+						tempformat[format_string.length()-pos+1] = '\0';
+						//Print the element that is the last one in the column
+						fprintf(filep, "$");
+						fprintf(filep, tempformat, table[i][j]);
+						fprintf(filep, "$");
+					}else{
+						//Copying the content in the format string to the temporary string to print
+						tempformat_string = format_string.substr(pos, fpos-pos)+"\t";
+						tempformat_string.copy(tempformat, tempformat_string.length(), 0);
+						tempformat[tempformat_string.length()] = '\0';
+						//Update the position for the next element to be print
+						pos = fpos;
+						//Print the element
+						fprintf(filep, "$");
+						fprintf(filep, tempformat, table[i][j]);
+						fprintf(filep, "$ &");
+					}
+				}
+				fprintf(filep, "\\\\\\midrule\n");
+			}
+
+		fprintf(filep,"\\end{tabular}\n");
+		fprintf(filep,"\\end{center}\n");
+		fprintf(filep,"\\end{table}\n");
+	}
 	//Closing the file opened for writing the table content
 	fclose(filep);
 }

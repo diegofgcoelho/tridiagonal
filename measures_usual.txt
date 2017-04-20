@@ -1,5 +1,14 @@
-50	86	2.647e-03	0.299	
-100	173	2.221e-03	1.106	
-500	871	1.351e-03	19.943	
-1000	1736	1.328e-03	85.460	
-5000	2000	3.700e-04	469.450	
+ 0x0.07fadf179f62p-1022dd the booktabs package in the main latex file
+\begin{table}
+\begin{center}
+\caption{write your caption here}
+\label{write your label here}
+\begin{tabular}{
+$50	$ &$86	$ &$2.647e-03	$ &$0.228	$\\\midrule
+$100	$ &$173	$ &$2.221e-03	$ &$0.428	$\\\midrule
+$500	$ &$871	$ &$1.351e-03	$ &$10.257	$\\\midrule
+$1000	$ &$1736	$ &$1.328e-03	$ &$46.206	$\\\midrule
+$5000	$ &$2000	$ &$3.700e-04	$ &$248.284	$\\\midrule
+\end{tabular}
+\end{center}
+\end{table}
