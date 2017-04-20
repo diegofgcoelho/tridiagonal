@@ -71,8 +71,6 @@ int main(){
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
 		//Defining the number of nonzero elements for the tridiagonal matrix
 		unsigned const tridnnz = 3*sp_trid_n[i]-2;
-		//Defining the number of nonzero elements for the square of the tridiagonal matrix
-		unsigned const pentnnz = 5*sp_trid_n[i]-4;
 
 		//Allocating memory for the tridiagonal matrix. Note: all the elements are set to zero
 		m = gsl_spmatrix_alloc_nzmax(sp_trid_n[i], sp_trid_n[i], tridnnz, GSL_SPMATRIX_TRIPLET);
