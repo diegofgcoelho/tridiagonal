@@ -169,7 +169,7 @@ int main(){
 		printf("\t%d\t%.3f\t%.3e\t%.3f\n\n", sp_trid_n[j], miter_array[j], mlambdas_array[j], mtimes_array[j]);
 	}
 
-	//Forming table to be printed through save_table function
+	//Forming table to be printed through save_table function based on the measures for the usual Power method
 	double** measures_table = (double**) malloc(sizeof(double*)*n_sp_trid_n);
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
 		measures_table[i] = (double*)malloc(sizeof(double)*4);
@@ -184,6 +184,20 @@ int main(){
 	char filename_usual[] = "measures_usual.txt";
 	//Printing the table measures_table
 	save_table(filename_usual, measures_table, n_sp_trid_n, 4, "%.0f%.0f%.3e%.3f", true);
+
+	//Forming table to be printed through save_table function based on the measures for the modified Power method
+	for(unsigned i = 0; i < n_sp_trid_n; i++){
+		//Setting the content of each row of the table to be print
+		measures_table[i][0] = sp_trid_n[i];
+		measures_table[i][1] = miter_array[i];
+		measures_table[i][2] = mlambdas_array[i];
+		measures_table[i][3] = mtimes_array[i];
+	}
+	//File name
+	char filename_modified[] = "measures_modified.txt";
+
+	//Printing the table measures_table
+	save_table(filename_modified, measures_table, n_sp_trid_n, 4, "%.0f%.0f%.3e%.3f", true);
 
 	//Freeing all the allocated memory for printing the table
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
@@ -217,7 +231,7 @@ int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit,
 	 * v is a gsl_vector representing the initial guess for the eigenvector associated with the
 	 * largest eigenvalue
 	 * maxit is the maximum number of iterations
-	 * prec is the preision using for the stopping criteria for the vector difference norm
+	 * prec is the precision using for the stopping criteria for the vector difference norm
 	 */
 	/*Output:
 	 * v represents the eigenvector associated with the largest eigenvalue
@@ -364,7 +378,7 @@ void save_table(char const* filename, double** table, unsigned size1, unsigned s
 	 * table is the pointer to the table to be saved--pointer to pointer of doubles
 	 * size1 and size2 represents the number of rows and columns of the input argument table
 	 * format is a array of chars representing the format that the table must be printed
-	 * separetor is the type of separation between the table entries to be printed. If you are using latex format,
+	 * separator is the type of separation between the table entries to be printed. If you are using latex format,
 	 * this variable value is discarded
 	 * latex is a bool representing if the user want the table to be print in latex format or not
 	 */
@@ -441,7 +455,7 @@ void save_table(char const* filename, double** table, unsigned size1, unsigned s
 	} else {
 		printf("\n\nPriting data in latex format.\n\n");
 		//Printing in the latex format
-		fprintf(filep,"\% add the booktabs package in the main latex file\n");
+		fprintf(filep,"%% add the booktabs package in the main latex file\n");
 		fprintf(filep,"\\begin{table}\n");
 		fprintf(filep,"\\begin{center}\n");
 		fprintf(filep,"\\caption{write your caption here}\n");
