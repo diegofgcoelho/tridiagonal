@@ -18,17 +18,20 @@
 #define MAXITE 2000
 
 void fill_spmatrix_kac(gsl_spmatrix*);
+void fill_spmatrix_random(gsl_spmatrix* m, gsl_rng* rng);
 int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit, double prec, unsigned* iter);
 double max_mag(gsl_vector* v);
 bool check_stop(gsl_vector* v, gsl_vector* vv, gsl_vector* vvv, double prec);
 void save_table(char const* filename, double** table, unsigned size1, unsigned size2, char const* format, bool latex);
-void square_trid(gsl_spmatrix const* m, gsl_spmatrix** tempmm);
+void square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm);
+void square_trid_crs(gsl_spmatrix const* m, gsl_spmatrix** mm);
+void square_trid_ccs(gsl_spmatrix const* m, gsl_spmatrix** mm);
 bool my_gsl_spmatrix_equal(gsl_spmatrix const* m1, gsl_spmatrix const* m2, double prec);
 //gsl_spmatrix* my_gsl_spmatrix_triplet(const gsl_spmatrix* m);
 
 int main(){
 	//Sparse matrices pointers
-	gsl_spmatrix *m, *tempm, *mm;
+	gsl_spmatrix *mcrs, *tempm, *mmcrs, *mccs, *gemmccs, *mmccs;
 	//Defining random number generator: Tausworth
 	const gsl_rng_type *my_rng_type;
 	gsl_rng *tausrng;
@@ -41,9 +44,9 @@ int main(){
 	gsl_rng_set(tausrng, seed);
 
 	//Tridiagonal matrices dimensions. This is useful for determining the nnz for each matrix
-	unsigned const sp_trid_n[] = {50, 100, 500, 1000, 5000};
+	unsigned const sp_trid_n[] = {500, 1000, 5000, 10000};
 	//Storing the number of different matrix sizes we will test (the size of array sp_trid_n)
-	unsigned const n_sp_trid_n = 5;
+	unsigned const n_sp_trid_n = 4;
 	double iter_array[n_sp_trid_n];
 	std::fill_n(&iter_array[0], n_sp_trid_n, 0);
 	double miter_array[n_sp_trid_n];
@@ -58,6 +61,8 @@ int main(){
 
 	//Auxiliary variables for counting the time
 	clock_t time_beg, time_end;
+	clock_t sqr_time_beg, sqr_time_end;
+	double gemm_time=0.0, sqr_tri_time=0.0, sqr_crs_time=0.0, sqr_ccs_time=0.0;
 	/*Vectors that will store the average times and number of iterations for the usual power
 	 * method (times_avg and iter_avg) and modified power method (mtimes_avg and miter_avg).
 	 */
@@ -69,21 +74,22 @@ int main(){
 	unsigned const rep = 100;
 
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
-		//Defining the number of nonzero elements for the tridiagonal matrix
-		unsigned const tridnnz = 3*sp_trid_n[i]-2;
-
 		//Allocating memory for the tridiagonal matrix. Note: all the elements are set to zero
-		m = gsl_spmatrix_alloc_nzmax(sp_trid_n[i], sp_trid_n[i], tridnnz, GSL_SPMATRIX_TRIPLET);
+		mcrs = gsl_spmatrix_alloc_nzmax(sp_trid_n[i], sp_trid_n[i], 3*sp_trid_n[i]-2, GSL_SPMATRIX_TRIPLET);
 		//Allocating memory for the square of the tridiagonal matrix. Note: all the elements are set to zero
 		//Not needed anymore because of the function square_trid
 		//mm = gsl_spmatrix_alloc_nzmax(sp_trid_n[i], sp_trid_n[i], pentnnz, GSL_SPMATRIX_CCS);
 
 		//Fill the matrix entries to be a Kac-Sylvester-Clement matrix
-		fill_spmatrix_kac(m);
+		fill_spmatrix_kac(mcrs);
+		//Fill the matrix entries to be a tridiagonal matrix
+		//fill_spmatrix_random(mcrs, tausrng);
 
+		//Converting m to CRS format
+		tempm = mcrs;
+		mcrs = gsl_spmatrix_crs(tempm);
 		//Converting m to CCS format
-		tempm = m;
-		m = gsl_spmatrix_ccs(tempm);
+		mccs = gsl_spmatrix_ccs(tempm);
 
 		//Auxiliary variable representing the initial guess for the matrix eigenvector
 		gsl_vector* v = gsl_vector_alloc(sp_trid_n[i]);
@@ -98,8 +104,8 @@ int main(){
 		//Run over all replicates for matrix size sp_tridi_n[i]
 		for (unsigned j = 0; j < rep; ++j) {
 			//Auxiliary variables used for getting the number of iterations and the eigenvalue estimate
-			double lambda;
-			unsigned iter;
+			double lambda = 0.0;
+			unsigned iter = 0;
 
 			//Setting the initial values of v that are stored in _V
 			gsl_vector_memcpy(v, _v);
@@ -108,7 +114,7 @@ int main(){
 			 * of a matrix
 			 */
 			time_beg = clock();
-			power_method(m, v, &lambda, MAXITE, symprec, &iter);
+			power_method(mcrs, v, &lambda, MAXITE, symprec, &iter);
 			time_end = clock();
 			times_array[i]+=1000*(time_end-time_beg)/(double)CLOCKS_PER_SEC;
 			iter_array[i]+=iter;
@@ -120,24 +126,47 @@ int main(){
 			/*Calling power_method function with the matrix square that returns the estimate for the largest eigenvalue
 			 * of a matrix
 			 */
-			time_beg = clock();//here we take the time used for computing the square into account
-			//Calculating the matrix square without fast algorithm
-			//gsl_spblas_dgemm(1, m, m, mm);
-			//Calculating the matrix square with fast algorithm
-			square_trid(m, &mm);
-			/*gsl_spmatrix* testmm = NULL;
-			square_trid(m, &testmm);
 
-			if(gsl_spmatrix_equal(mm, testmm)!=1){
-				printf("\n\n The matrix are NOT EQUAL\n\n");
-			};
-			gsl_spmatrix_free(testmm);*/
-
-
-			power_method(mm, v, &lambda, MAXITE, symprec, &iter);
+			time_beg = clock();
+			sqr_time_beg = clock();
+			square_trid_crs(mcrs, &mmcrs);
+			sqr_time_end = clock();
+			sqr_crs_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
+			power_method(mmcrs, v, &lambda, MAXITE, symprec, &iter);
 			time_end = clock();
+
+			sqr_time_beg = clock();
+			square_trid_ccs(mccs, &mmccs);
+			sqr_time_end = clock();
+			sqr_ccs_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
+
+			sqr_time_beg = clock();
+			gemmccs = gsl_spmatrix_alloc_nzmax(sp_trid_n[i], sp_trid_n[i], 5*sp_trid_n[i]-4, GSL_SPMATRIX_CCS);
+			gsl_spblas_dgemm(1, mccs, mccs, gemmccs);
+			sqr_time_end = clock();
+			gemm_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
+
+			gsl_spmatrix* testmm = NULL;
+			sqr_time_beg = clock();
+			square_trid(mcrs, &testmm);
+			//gsl_spmatrix_fprintf(stdout, testmm, "%.2f");
+			sqr_time_end = clock();
+			sqr_tri_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
+
+			if(!my_gsl_spmatrix_equal(mmccs, gemmccs, 1e-10)){
+				printf("The matrices are not equal.\n");
+				gsl_spmatrix_scale(mmccs, -1);
+				gsl_spmatrix_add(mmccs, mmccs, gemmccs);
+				gsl_spmatrix_scale(mmccs, 1e6);
+				gsl_spmatrix_fprintf(stdout, mmccs, "%.02f");
+				exit(1);
+			}
+			gsl_spmatrix_free(gemmccs);
+
+			gsl_spmatrix_free(testmm);
+
 			//Deallocating the memory used to store the square matrix
-			gsl_spmatrix_free(mm);
+			gsl_spmatrix_free(mmcrs);
 			mtimes_array[i]+=1000*(time_end-time_beg)/(double)CLOCKS_PER_SEC;
 			miter_array[i]+=iter;
 			mlambdas_array[i]+=fabs((sqrt(lambda)-(sp_trid_n[i]-1))/(sp_trid_n[i]-1));
@@ -152,10 +181,10 @@ int main(){
 		mtimes_array[i]/=rep;
 
 		//Free the memory space for the matrices and vectors
-		gsl_spmatrix_free(m);
+		gsl_spmatrix_free(mcrs);
 		gsl_spmatrix_free(tempm);
-		//gsl_spmatrix_free(mm);
 		gsl_vector_free(v);
+		gsl_vector_free(_v);
 	}
 
 	printf("\n\n*****The statistics for the usual method*****\n\n");
@@ -169,10 +198,14 @@ int main(){
 		printf("\t%d\t%.3f\t%.3e\t%.3f\n\n", sp_trid_n[j], miter_array[j], mlambdas_array[j], mtimes_array[j]);
 	}
 
+	printf("Times required by gemm, fast alg for triplet, ccs and crs: %.2f, %.2f, %.2f and %.2f\n\n", gemm_time, sqr_tri_time, sqr_ccs_time, sqr_crs_time);
+
 	//Forming table to be printed through save_table function based on the measures for the usual Power method
-	double** measures_table = (double**) malloc(sizeof(double*)*n_sp_trid_n);
+	//double** measures_table = (double**) malloc(sizeof(double*)*n_sp_trid_n);
+	double** measures_table = new double*[n_sp_trid_n];
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
-		measures_table[i] = (double*)malloc(sizeof(double)*4);
+		//measures_table[i] = (double*)malloc(sizeof(double)*4);
+		measures_table[i] = new double [4];
 		//Setting the content of each row of the table to be print
 		measures_table[i][0] = sp_trid_n[i];
 		measures_table[i][1] = iter_array[i];
@@ -201,9 +234,9 @@ int main(){
 
 	//Freeing all the allocated memory for printing the table
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
-		delete[] measures_table[i];
+		delete [] measures_table[i];
 	}
-	delete[] measures_table;
+	delete [] measures_table;
 
 	return 0;
 }
@@ -223,6 +256,46 @@ void fill_spmatrix_kac(gsl_spmatrix* m){
 		//Setting the elements of the lower diagonal
 		gsl_spmatrix_set(m, i+1, i, nrows-i-1);
 	}
+}
+
+void fill_spmatrix_random(gsl_spmatrix* m, gsl_rng* rng){
+	/*Input:
+	 * m is a gls_spmatrix
+	 * rng is a gsl_rng
+	 */
+	/*Output:
+	 * m is a gsl_spmatrix representing a tridiagonal matrix
+	 */
+	/*Requirement:
+	 * m is in TRIPLET format, have null entries and represent a tridiagonal matrix
+	 */
+	/*Description:
+	 * This function modifies the entries of m making it become a unsymmetric tridiagonal matrix with real entries whose values
+	 * taken from the random number generator pointed by rng
+	 */
+	//Number of rows of the matrix
+	unsigned nrows = m->size1;
+
+	//Multiplicative constant
+	unsigned const mulc = 100;
+
+	//Setting the first row elements
+	gsl_spmatrix_set(m, 0, 0, mulc*gsl_rng_uniform(rng));
+	gsl_spmatrix_set(m, 0, 1, mulc*gsl_rng_uniform(rng));
+
+	//Setting the elements between the first and last line
+	for(unsigned i = 1; i < nrows-1; i++){
+		//Setting the element at the left of the diagonal element
+		gsl_spmatrix_set(m, i, i-1, mulc*gsl_rng_uniform(rng));
+		//Setting the diagonal element
+		gsl_spmatrix_set(m, i, i, mulc*gsl_rng_uniform(rng));
+		//Setting the element at the right of the diagonal element
+		gsl_spmatrix_set(m, i, i+1, mulc*gsl_rng_uniform(rng));
+	}
+
+	//Setting the last row elements
+	gsl_spmatrix_set(m, nrows-1, nrows-2, mulc*gsl_rng_uniform(rng));
+	gsl_spmatrix_set(m, nrows-1, nrows-1, mulc*gsl_rng_uniform(rng));
 }
 
 int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit, double prec, unsigned* iter){
@@ -258,8 +331,8 @@ int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit,
 
 	//Temporary and auxiliary variables:
 	//Auxiliary variables for eigenvector estimate for stopping criteria
-	gsl_vector* vv = gsl_vector_alloc(v->size);
-	gsl_vector* vvv = gsl_vector_alloc(v->size);
+	gsl_vector* vv = gsl_vector_alloc(v->size); gsl_vector_set_all(vv, 0.0);
+	gsl_vector* vvv = gsl_vector_alloc(v->size); gsl_vector_set_all(vvv, 0.0);
 
 	//Scaling the initial estimate for the eigenvector
 	*lambda = max_mag(v);
@@ -503,9 +576,14 @@ void save_table(char const* filename, double** table, unsigned size1, unsigned s
 }
 
 void square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm){
+	/*Note: this function execution is slower than the using the gsl_spmatrix_gemm with the same argument.
+	 * This is because of the access to the elements that is using the gsl_spmatrix_get, which is very slow.
+	 * The function works, but it is slow. The suare_trid_fast is being written in order to solve this problem.
+	 */
+
 	/*Input:
 	 * m is a pointer for gsl_spmatrix
-	 * mm is a pointer for gsl_spmatrix that will be in GSL_SPMATRIX_CCS format
+	 * mm is a pointer for gsl_spmatrix that will be in GSL_SPMATRIX_CRS format
 	 */
 	/*Output
 	 * mm is the output and represents the matrix square of the input argument m
@@ -534,21 +612,21 @@ void square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm){
 		return;
 	}
 
-	//Compute the elements of row 0
+	//Compute the auxiliary variables
 	double mul1 = gsl_spmatrix_get(m, 1,0)*gsl_spmatrix_get(m, 0,1);
 	double mul2 = gsl_spmatrix_get(m, 2,1)*gsl_spmatrix_get(m, 1,2);
 	double add1 = gsl_spmatrix_get(m, 0,0)+gsl_spmatrix_get(m, 1,1);
 	double add2 = gsl_spmatrix_get(m, 1,1)+gsl_spmatrix_get(m, 2,2);
 
-	//Compute the elements of row 1
-	gsl_spmatrix_set(tempmm, 0, 0, pow(gsl_spmatrix_get(m, 1,1),2)+mul1);
-	gsl_spmatrix_set(tempmm, 0, 1, add1*gsl_spmatrix_get(m, 1,2));
+	//Compute the elements of row 0
+	gsl_spmatrix_set(tempmm, 0, 0, pow(gsl_spmatrix_get(m, 0,0),2)+mul1);
+	gsl_spmatrix_set(tempmm, 0, 1, add1*gsl_spmatrix_get(m, 0, 1));
 	gsl_spmatrix_set(tempmm, 0, 2, gsl_spmatrix_get(m, 0,1)*gsl_spmatrix_get(m, 1,2));
 
-	//Compute the elements of row 2
-	gsl_spmatrix_set(tempmm, 1, 0, add1*gsl_spmatrix_get(m, 2,1));
-	gsl_spmatrix_set(tempmm, 1, 1, mul1+pow(gsl_spmatrix_get(m, 2,2),2)+mul2);
-	gsl_spmatrix_set(tempmm, 1, 2, add2*gsl_spmatrix_get(m, 2,3));
+	//Compute the elements of row 1
+	gsl_spmatrix_set(tempmm, 1, 0, add1*gsl_spmatrix_get(m, 1,0));
+	gsl_spmatrix_set(tempmm, 1, 1, mul1+pow(gsl_spmatrix_get(m, 1,1),2)+mul2);
+	gsl_spmatrix_set(tempmm, 1, 2, add2*gsl_spmatrix_get(m, 1,2));
 	gsl_spmatrix_set(tempmm, 1, 3, gsl_spmatrix_get(m, 1,2)*gsl_spmatrix_get(m, 2,3));
 
 	for(unsigned i = 2; i < msize-2; i++){
@@ -560,7 +638,7 @@ void square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm){
 
 		//Compute the elements of row i
 		gsl_spmatrix_set(tempmm, i, i-2, gsl_spmatrix_get(m, i-1,i-2)*gsl_spmatrix_get(m, i,i-1));
-		gsl_spmatrix_set(tempmm, i, i+1, add1*gsl_spmatrix_get(m, i,i-1));
+		gsl_spmatrix_set(tempmm, i, i-1, add1*gsl_spmatrix_get(m, i,i-1));
 		gsl_spmatrix_set(tempmm, i, i, mul1+pow(gsl_spmatrix_get(m, i,i),2)+mul2);
 		gsl_spmatrix_set(tempmm, i, i+1, add2*gsl_spmatrix_get(m, i,i+1));
 		gsl_spmatrix_set(tempmm, i, i+2, gsl_spmatrix_get(m, i,i+1)*gsl_spmatrix_get(m, i+1,i+2));
@@ -586,6 +664,535 @@ void square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm){
 	//Converting the output matrix to
 	*mm = gsl_spmatrix_ccs(tempmm);
 	gsl_spmatrix_free(tempmm);
+}
+
+void square_trid_crs(gsl_spmatrix const* m, gsl_spmatrix** mm){
+	/*Input:
+	 * m is a pointer for gsl_spmatrixL_SPMATRIX_CRS format
+	 * mm is a pointer for gsl_spmatrix that will be in GSL_SPMATRIX_CRS format
+	 */
+	/*Output
+	 * mm is the output and represents the matrix square of the input argument m
+	 */
+	/*Requirement
+	 * m must be a square tridiagonal matrix in GSL_SPMATRIX_CRS format in order to the output be correct
+	 */
+	/*Description:
+	 * This function returns the matrix square of the input argument (m) in the memory location pointed by mm. The memory is allocated by
+	 * the function and must be deallocated by the calling function.
+	 */
+
+	//Note: possible improvement is to remove the update of mm->nz every time a new element is added and just update it at the end.
+
+	//Sanity Check
+	if(m->size1 != m->size2){
+		printf("\n\nError: the input matrix must be square.\n\n");
+		return;
+	}
+
+	unsigned msize = m->size1;
+	//Allocating memory for the output matrix
+	(*mm) = gsl_spmatrix_alloc_nzmax(msize, msize, 5*msize-4, GSL_SPMATRIX_CRS);
+
+	//Sanity Check
+	if((*mm) == NULL){
+		printf("\n\nError: memory for the output matrix could not be allocated.\n\n");
+		return;
+	}
+
+	size_t *mi = m->i;
+	size_t *mp = m->p;
+	double *md = m->data;
+
+	//Cleaning the entries of *mm->p and setting *mm->nz to zero
+	std::fill_n(&((*mm)->p[0]), msize+1, 0);
+	(*mm)->nz = 0;
+
+	//Doubles that will always use for storing the elements of each line.
+	double  data[3][3] = { {0.0} };
+
+	//Value used for computing each element
+	double tempmmv = 0.0;
+
+	//Get the elements of the first 3 rows
+	for(unsigned i = 0; i < 2; i++){
+		//mp[mi[i]] indicate the row
+		//mi[i] indicate the column
+
+		for(unsigned j = mp[i]; j < mp[i+1]; j++){
+			data[i][mi[j]] = md[j];
+		}
+	}
+	for(unsigned j = mp[2]; j < mp[3]; j++){
+		data[2][mi[j]-1] = md[j];
+	}
+
+	//Compute the elements of row 0. Note the corrections in accessing all the elements at row 2
+	double mul1 = data[1][0]*data[0][1];
+	double mul2 = data[2][0]*data[1][2];
+	double add1 = data[0][0]+data[1][1];
+	double add2 = data[1][1]+data[2][1];
+
+	//Compute the elements of row 0
+	tempmmv = pow(data[0][0], 2)+mul1;
+	if(tempmmv != 0.0){
+		(*mm)->data[0] = tempmmv;
+		(*mm)->i[0] = 0;
+		(*mm)->p[1]++;
+		(*mm)->nz++;
+	}
+	tempmmv = add1*data[0][1];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 1;
+		(*mm)->p[1]++;
+		(*mm)->nz++;
+	}
+	tempmmv = data[0][1]*data[1][2];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 2;
+		(*mm)->p[1]++;
+		((*mm)->nz)++;
+	}
+	//Update the value of the next component of p
+	(*mm)->p[2] = (*mm)->p[1];
+
+	//Compute the elements of row 1
+	tempmmv = add1*data[1][0];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 0;
+		(*mm)->p[2]++;
+		((*mm)->nz)++;
+	}
+	tempmmv = mul1+pow(data[1][1],2)+mul2;
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 1;
+		(*mm)->p[2]++;
+		((*mm)->nz)++;
+	}
+	tempmmv = add2*data[1][2];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 2;
+		(*mm)->p[2]++;
+		((*mm)->nz)++;
+	}
+	tempmmv = data[1][2]*data[2][2];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 3;
+		(*mm)->p[2]++;
+		(*mm)->nz++;
+	}
+	//Update the value of the next component of p
+	(*mm)->p[3] = (*mm)->p[2];
+
+	for (unsigned i = 2; i < msize-2; i++) {
+		//Update the elements of the temporary matrix data
+		//Shifting the data already preset in the matrix data
+		for(unsigned p = 0; p < 2; p++){
+			for(unsigned k = 0; k < 3; k++){
+				data[p][k] = data[p+1][k];
+			}
+		}
+		//Set to zero the elements in the last row of data
+		data[2][0] = 0.0; data[2][1] = 0.0; data[2][0] = 0.0;
+		//Update the elements in the last row of data, which will contain the elements in the i+1 row in in the input matrix m
+		for(unsigned j = mp[i+1]; j < mp[i+2]; j++){
+			//Always write in the last row. note the correction in the column position for the matrix data
+			data[2][mi[j]-i] = md[j];
+		}
+
+		//Compute auxiliary variables
+		mul1 = mul2;
+		mul2 = data[1][2]*data[2][0];
+		add1 = add2;
+		add2 = data[2][1]+data[1][1];
+
+		//Compute the elements of row i
+		tempmmv = data[0][0]*data[1][0];
+		if(tempmmv != 0.0){
+			(*mm)->data[(*mm)->nz] = tempmmv;
+			(*mm)->i[(*mm)->nz] = i-2;
+			(*mm)->p[i+1]++;
+			(*mm)->nz++;
+		}
+		tempmmv = add1*data[1][0];
+		if(tempmmv != 0.0){
+			(*mm)->data[(*mm)->nz] = tempmmv;
+			(*mm)->i[(*mm)->nz] = i-1;
+			(*mm)->p[i+1]++;
+			(*mm)->nz++;
+		}
+		tempmmv = mul1+pow(data[1][1], 2)+mul2;
+		if(tempmmv != 0.0){
+			(*mm)->data[(*mm)->nz] = tempmmv;
+			(*mm)->i[(*mm)->nz] = i;
+			(*mm)->p[i+1]++;
+			(*mm)->nz++;
+		}
+		tempmmv = add2*data[1][2];
+		if(tempmmv != 0.0){
+			(*mm)->data[(*mm)->nz] = tempmmv;
+			(*mm)->i[(*mm)->nz] = i+1;
+			(*mm)->p[i+1]++;
+			(*mm)->nz++;
+		}
+		tempmmv = data[1][2]*data[2][2];
+		if(tempmmv != 0.0){
+			(*mm)->data[(*mm)->nz] = tempmmv;
+			(*mm)->i[(*mm)->nz] = i+2;
+			(*mm)->p[i+1]++;
+			(*mm)->nz++;
+		}
+		//Update the value of the next component of p
+		(*mm)->p[i+2] = (*mm)->p[i+1];
+
+	}
+
+	//Update the elements of the temporary matrix data
+	//Shifting the data already preset in the matrix data
+	for(unsigned p = 0; p < 2; p++){
+		for(unsigned k = 0; k < 3; k++){
+			data[p][k] = data[p+1][k];
+		}
+	}
+	//Set to zero the elements in the last row of data
+	data[2][0] = 0.0; data[2][1] = 0.0; data[2][2] = 0.0;
+	//Update the elements in the last row of data, which will contain the elements in the i+1 row in in the input matrix m
+	for(unsigned j = mp[msize-1]; j < mp[msize]; j++){
+		//Always write in the last row. note the correction in the column position for the matrix data
+		data[2][mi[j]-msize+3] = md[j];
+	}
+
+	//Compute auxiliary variable
+	mul1 = mul2;
+	mul2 = data[1][2]*data[2][1];
+	add1 = add2;
+	add2 = data[1][1]+data[2][2];
+
+	//Compute the elements of row msize-2
+	tempmmv = data[0][0]*data[1][0];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-4;
+		(*mm)->p[msize-1]++;
+		(*mm)->nz++;
+	}
+	tempmmv = add1*data[1][0];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-3;
+		(*mm)->p[msize-1]++;
+		(*mm)->nz++;
+	}
+	tempmmv = mul1+pow(data[1][1], 2)+mul2;
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-2;
+		(*mm)->p[msize-1]++;
+		(*mm)->nz++;
+	}
+	tempmmv = add2*data[1][2];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-1;
+		(*mm)->p[msize-1]++;
+		(*mm)->nz++;
+	}
+	//Update the value of the next component of p
+	(*mm)->p[msize] = (*mm)->p[msize-1];
+
+
+	//Compute elements of row msize-1
+	tempmmv = data[1][0]*data[2][1];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-3;
+		(*mm)->p[msize]++;
+		(*mm)->nz++;
+	}
+	tempmmv = add2*data[2][1];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-2;
+		(*mm)->p[msize]++;
+		(*mm)->nz++;
+	}
+	tempmmv = pow(data[2][2],2)+mul2;
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-1;
+		(*mm)->p[msize]++;
+		(*mm)->nz++;
+	}
+}
+
+void square_trid_ccs(gsl_spmatrix const* m, gsl_spmatrix** mm){
+	/*Input:
+	 * m is a pointer for gsl_spmatrixL_SPMATRIX_CCS format
+	 * mm is a pointer for gsl_spmatrix that will be in GSL_SPMATRIX_CCS format
+	 */
+	/*Output
+	 * mm is the output and represents the matrix square of the input argument m
+	 */
+	/*Requirement
+	 * m must be a square tridiagonal matrix in GSL_SPMATRIX_CCS format in order to the output be correct
+	 */
+	/*Description:
+	 * This function returns the matrix square of the input argument (m) in the memory location pointed by mm. The memory is allocated by
+	 * the function and must be deallocated by the calling function.
+	 */
+
+	//Note: possible improvement is to remove the update of mm->nz every time a new element is added and just update it at the end.
+
+	//Sanity Check
+	if(m->size1 != m->size2){
+		printf("\n\nError: the input matrix must be square.\n\n");
+		return;
+	}
+
+	unsigned msize = m->size1;
+	//Allocating memory for the output matrix
+	(*mm) = gsl_spmatrix_alloc_nzmax(msize, msize, 5*msize-4, GSL_SPMATRIX_CCS);
+
+	//Sanity Check
+	if((*mm) == NULL){
+		printf("\n\nError: memory for the output matrix could not be allocated.\n\n");
+		return;
+	}
+
+	size_t *mi = m->i;
+	size_t *mp = m->p;
+	double *md = m->data;
+
+	//Cleaning the entries of *mm->p and setting *mm->nz to zero
+	std::fill_n(&((*mm)->p[0]), msize+1, 0);
+	(*mm)->nz = 0;
+
+	//Doubles that will always use for storing the elements of each line.
+	double  data[3][3] = { {0.0} };
+
+	//Value used for computing each element
+	double tempmmv = 0.0;
+
+	//Get the elements of the first 3 columns
+	for(unsigned i = 0; i < 2; i++){
+		//mi[i] indicate the row
+
+		for(unsigned j = mp[i]; j < mp[i+1]; j++){
+			data[mi[j]][i] = md[j];
+		}
+	}
+	for(unsigned j = mp[2]; j < mp[3]; j++){
+		data[mi[j]-1][2] = md[j];
+	}
+
+	//Compute the elements of column 0. Note the corrections in accessing all the elements at row 2
+	double mul1 = data[1][0]*data[0][1];
+	double mul2 = data[0][2]*data[2][1];
+	double add1 = data[0][0]+data[1][1];
+	double add2 = data[1][1]+data[1][2];
+
+	//Compute the elements of column 0
+	tempmmv = pow(data[0][0], 2)+mul1;
+	if(tempmmv != 0.0){
+		(*mm)->data[0] = tempmmv;
+		(*mm)->i[0] = 0;
+		(*mm)->p[1]++;
+		(*mm)->nz++;
+	}
+	tempmmv = add1*data[1][0];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 1;
+		(*mm)->p[1]++;
+		(*mm)->nz++;
+	}
+	tempmmv = data[1][0]*data[2][1];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 2;
+		(*mm)->p[1]++;
+		((*mm)->nz)++;
+	}
+	//Update the value of the next component of p
+	(*mm)->p[2] = (*mm)->p[1];
+
+	//Compute the elements of column 1
+	tempmmv = add1*data[0][1];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 0;
+		(*mm)->p[2]++;
+		((*mm)->nz)++;
+	}
+	tempmmv = mul1+pow(data[1][1],2)+mul2;
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 1;
+		(*mm)->p[2]++;
+		((*mm)->nz)++;
+	}
+	tempmmv = add2*data[2][1];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 2;
+		(*mm)->p[2]++;
+		((*mm)->nz)++;
+	}
+	tempmmv = data[2][1]*data[2][2];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = 3;
+		(*mm)->p[2]++;
+		(*mm)->nz++;
+	}
+	//Update the value of the next component of p
+	(*mm)->p[3] = (*mm)->p[2];
+
+	for (unsigned i = 2; i < msize-2; i++) {
+		//Update the elements of the temporary matrix data
+		//Shifting the data already preset in the matrix data
+		for(unsigned p = 0; p < 3; p++){
+			for(unsigned k = 0; k < 2; k++){
+				data[p][k] = data[p][k+1];
+			}
+		}
+		//Set to zero the elements in the last column of data
+		data[0][2] = 0.0; data[1][2] = 0.0; data[2][2] = 0.0;
+		//Update the elements in the last column of data, which will contain the elements in the i+1 column in the input matrix m
+		for(unsigned j = mp[i+1]; j < mp[i+2]; j++){
+			//Always write in the last column. Note the correction in the row position for the matrix data
+			data[mi[j]-i][2] = md[j];
+		}
+
+		//Compute auxiliary variables
+		mul1 = mul2;
+		mul2 = data[2][1]*data[0][2];
+		add1 = add2;
+		add2 = data[1][2]+data[1][1];
+
+		//Compute the elements of column i
+		tempmmv = data[0][0]*data[0][1];
+		if(tempmmv != 0.0){
+			(*mm)->data[(*mm)->nz] = tempmmv;
+			(*mm)->i[(*mm)->nz] = i-2;
+			(*mm)->p[i+1]++;
+			(*mm)->nz++;
+		}
+		tempmmv = add1*data[0][1];
+		if(tempmmv != 0.0){
+			(*mm)->data[(*mm)->nz] = tempmmv;
+			(*mm)->i[(*mm)->nz] = i-1;
+			(*mm)->p[i+1]++;
+			(*mm)->nz++;
+		}
+		tempmmv = mul1+pow(data[1][1], 2)+mul2;
+		if(tempmmv != 0.0){
+			(*mm)->data[(*mm)->nz] = tempmmv;
+			(*mm)->i[(*mm)->nz] = i;
+			(*mm)->p[i+1]++;
+			(*mm)->nz++;
+		}
+		tempmmv = add2*data[2][1];
+		if(tempmmv != 0.0){
+			(*mm)->data[(*mm)->nz] = tempmmv;
+			(*mm)->i[(*mm)->nz] = i+1;
+			(*mm)->p[i+1]++;
+			(*mm)->nz++;
+		}
+		tempmmv = data[2][1]*data[2][2];
+		if(tempmmv != 0.0){
+			(*mm)->data[(*mm)->nz] = tempmmv;
+			(*mm)->i[(*mm)->nz] = i+2;
+			(*mm)->p[i+1]++;
+			(*mm)->nz++;
+		}
+		//Update the value of the next component of p
+		(*mm)->p[i+2] = (*mm)->p[i+1];
+
+	}
+
+	//Update the elements of the temporary matrix data
+	//Shifting the data already preset in the matrix data
+	for(unsigned p = 0; p < 3; p++){
+		for(unsigned k = 0; k < 2; k++){
+			data[p][k] = data[p][k+1];
+		}
+	}
+	//Set to zero the elements in the last column of data
+	data[0][2] = 0.0; data[1][2] = 0.0; data[2][2] = 0.0;
+	//Update the elements in the last column of data, which will contain the elements in the i+1 column in the input matrix m
+	for(unsigned j = mp[msize-1]; j < mp[msize]; j++){
+		//Always write in the last column. Note the correction in the row position for the matrix data
+		data[mi[j]-msize+3][2] = md[j];
+	}
+
+	//Compute auxiliary variable
+	mul1 = mul2;
+	mul2 = data[1][2]*data[2][1];
+	add1 = add2;
+	add2 = data[1][1]+data[2][2];
+
+	//Compute the elements of column msize-2
+	tempmmv = data[0][0]*data[0][1];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-4;
+		(*mm)->p[msize-1]++;
+		(*mm)->nz++;
+	}
+	tempmmv = add1*data[0][1];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-3;
+		(*mm)->p[msize-1]++;
+		(*mm)->nz++;
+	}
+	tempmmv = mul1+pow(data[1][1], 2)+mul2;
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-2;
+		(*mm)->p[msize-1]++;
+		(*mm)->nz++;
+	}
+	tempmmv = add2*data[2][1];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-1;
+		(*mm)->p[msize-1]++;
+		(*mm)->nz++;
+	}
+	//Update the value of the next component of p
+	(*mm)->p[msize] = (*mm)->p[msize-1];
+
+
+	//Compute elements of column msize-1
+	tempmmv = data[0][1]*data[1][2];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-3;
+		(*mm)->p[msize]++;
+		(*mm)->nz++;
+	}
+	tempmmv = add2*data[1][2];
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-2;
+		(*mm)->p[msize]++;
+		(*mm)->nz++;
+	}
+	tempmmv = pow(data[2][2],2)+mul2;
+	if(tempmmv != 0.0){
+		(*mm)->data[(*mm)->nz] = tempmmv;
+		(*mm)->i[(*mm)->nz] = msize-1;
+		(*mm)->p[msize]++;
+		(*mm)->nz++;
+	}
 }
 
 bool my_gsl_spmatrix_equal(gsl_spmatrix const* m1, gsl_spmatrix const* m2, double prec){
