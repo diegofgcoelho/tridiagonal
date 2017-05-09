@@ -81,9 +81,9 @@ int main(){
 		//mm = gsl_spmatrix_alloc_nzmax(sp_trid_n[i], sp_trid_n[i], pentnnz, GSL_SPMATRIX_CCS);
 
 		//Fill the matrix entries to be a Kac-Sylvester-Clement matrix
-		fill_spmatrix_kac(mcrs);
+		//fill_spmatrix_kac(mcrs);
 		//Fill the matrix entries to be a tridiagonal matrix
-		//fill_spmatrix_random(mcrs, tausrng);
+		fill_spmatrix_random(mcrs, tausrng);
 
 		//Converting m to CRS format
 		tempm = mcrs;
