@@ -48,15 +48,28 @@ int main(){
 	unsigned const sp_trid_n[] = {500, 1000, 5000, 10000};
 	//Storing the number of different matrix sizes we will test (the size of array sp_trid_n)
 	unsigned const n_sp_trid_n = 4;
-	double iter_array[n_sp_trid_n];
+
+	//Average iterations for estimates
+	double iter_array[n_sp_trid_n], miter_array[n_sp_trid_n];
 	std::fill_n(&iter_array[0], n_sp_trid_n, 0);
-	double miter_array[n_sp_trid_n];
 	std::fill_n(&miter_array[0], n_sp_trid_n, 0);
 	//Eigenvalue estimates
-	double lambdas_array[n_sp_trid_n];
+	double lambdas_array[n_sp_trid_n], mlambdas_array[n_sp_trid_n];
 	std::fill_n(&lambdas_array[0], n_sp_trid_n, 0);
-	double mlambdas_array[n_sp_trid_n];
 	std::fill_n(&mlambdas_array[0], n_sp_trid_n, 0);
+	//Average times for estimates
+	double times_array[n_sp_trid_n], mtimes_array[n_sp_trid_n];
+	std::fill_n(&times_array[0], n_sp_trid_n, 0);
+	std::fill_n(&mtimes_array[0], n_sp_trid_n, 0);
+	//Total times for squaring (gsl_spmatrix_dgemm, fast_square_trid for CRS and CCS formats, respectively)
+	double** times_square = new double*[n_sp_trid_n];
+	for(unsigned int i = 0; i < n_sp_trid_n; i++){
+		times_square[i] = new double[4];
+		std::fill_n(&times_square[i][0], 4, 0);
+		//Putting the matrix in the first column
+		times_square[i][0] = sp_trid_n[i];
+	}
+
 	//The precision used for simulation
 	double symprec = 1e-3;
 
@@ -64,12 +77,6 @@ int main(){
 	clock_t time_beg, time_end;
 	clock_t sqr_time_beg, sqr_time_end;
 	double gemm_time=0.0, sqr_tri_time=0.0, sqr_crs_time=0.0, sqr_ccs_time=0.0;
-	/*Vectors that will store the average times and number of iterations for the usual power
-	 * method (times_avg and iter_avg) and modified power method (mtimes_avg and miter_avg).
-	 */
-	double times_array[n_sp_trid_n], mtimes_array[n_sp_trid_n];
-	std::fill_n(&times_array[0], n_sp_trid_n, 0);
-	std::fill_n(&mtimes_array[0], n_sp_trid_n, 0);
 
 	//The number of replicates
 	unsigned const rep = 100;
@@ -131,7 +138,6 @@ int main(){
 			gsl_spmatrix* testmm = NULL;
 			sqr_time_beg = clock();
 			fast_square_trid_triplet(mcrs, &testmm);
-			//gsl_spmatrix_fprintf(stdout, testmm, "%.2f");
 			sqr_time_end = clock();
 			sqr_tri_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
 
@@ -140,12 +146,14 @@ int main(){
 			gsl_spblas_dgemm(1, mccs, mccs, gemmccs);
 			sqr_time_end = clock();
 			gemm_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
+			times_square[i][1]+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
 
 			time_beg = clock();
 			sqr_time_beg = clock();
 			fast_square_trid(mcrs, &mmcrs);
 			sqr_time_end = clock();
 			sqr_crs_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
+			times_square[i][2]+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
 			power_method(mmcrs, v, &lambda, MAXITE, symprec, &iter);
 			time_end = clock();
 
@@ -153,6 +161,7 @@ int main(){
 			fast_square_trid(mccs, &mmccs);
 			sqr_time_end = clock();
 			sqr_ccs_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
+			times_square[i][3]+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
 
 			if(!my_gsl_spmatrix_equal(mmccs, gemmccs, 1e-10)){
 				printf("The matrices are not equal.\n");
@@ -199,15 +208,19 @@ int main(){
 		printf("\t%d\t%.3f\t%.3e\t%.3f\n\n", sp_trid_n[j], miter_array[j], mlambdas_array[j], mtimes_array[j]);
 	}
 
+	printf("\n\n*****The statistics for squaring algorithm*****\n\n");
+	printf("Size Time (dgemm)  Time (CRS)  Time (CCS)\n");
+	for(unsigned j=0; j<n_sp_trid_n; j++){
+		printf("\t%.0f\t%.3f\t%.3f\t%.3f\n\n", times_square[j][0], times_square[j][1], times_square[j][2], times_square[j][3]);
+	}
+
 	printf("Time required by gsl_spmatrix_dgemm:  %.2f\n", gemm_time);
 	printf("Time required by fast_square_trid_triplet: %.2f\n", sqr_tri_time);
 	printf("Times required by fast_square_trid for CCS and CRS formats: %.2f and %.2f\n\n", sqr_ccs_time, sqr_crs_time);
 
 	//Forming table to be printed through save_table function based on the measures for the usual Power method
-	//double** measures_table = (double**) malloc(sizeof(double*)*n_sp_trid_n);
 	double** measures_table = new double*[n_sp_trid_n];
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
-		//measures_table[i] = (double*)malloc(sizeof(double)*4);
 		measures_table[i] = new double [4];
 		//Setting the content of each row of the table to be print
 		measures_table[i][0] = sp_trid_n[i];
@@ -215,6 +228,11 @@ int main(){
 		measures_table[i][2] = lambdas_array[i];
 		measures_table[i][3] = times_array[i];
 	}
+
+	//File name
+	char filename_times[] = "measures_times.txt";
+	//Printing the table times_square
+	save_table(filename_times, times_square, n_sp_trid_n, 4, "%.0f%.3f%.3f%.3f", true);
 
 	//File name
 	char filename_usual[] = "measures_usual.txt";
@@ -500,7 +518,7 @@ void save_table(char const* filename, double** table, unsigned size1, unsigned s
 	int pos = 0;
 
 	if (latex==false) {
-		printf("\n\nPriting data in text format.\n\n");
+		printf("\n\nPriting data in text format in file %s.\n\n", filename);
 		//Part for printing in text format
 		for(unsigned i = 0; i < size1; i++){
 			//Resetting pos variable
@@ -529,7 +547,7 @@ void save_table(char const* filename, double** table, unsigned size1, unsigned s
 			fprintf(filep, "\n");
 		}
 	} else {
-		printf("\n\nPriting data in latex format.\n\n");
+		printf("\n\nPriting data in latex format in file %s.\n\n", filename);
 		//Printing in the latex format
 		fprintf(filep,"%% add the booktabs package in the main latex file\n");
 		fprintf(filep,"\\begin{table}\n");

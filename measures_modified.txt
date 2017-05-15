@@ -4,10 +4,11 @@
 \caption{write your caption here}
 \label{write your label here}
 \begin{tabular}{
-$500	$ &$61	$ &$5.784e-01	$ &$0.675	$\\\midrule
-$1000	$ &$60	$ &$7.772e-01	$ &$1.221	$\\\midrule
-$5000	$ &$29	$ &$9.515e-01	$ &$2.965	$\\\midrule
-$10000	$ &$153	$ &$9.770e-01	$ &$29.618	$\\\midrule
+$500	$ &$61	$ &$5.784e-01	$ &$0.677	$\\\midrule
+$1000	$ &$60	$ &$7.772e-01	$ &$1.282	$\\\midrule
+$5000	$ &$29	$ &$9.515e-01	$ &$3.081	$\\\midrule
+$10000	$ &$153	$ &$9.770e-01	$ &$29.608	$\\\midrule
+$50000	$ &$167	$ &$9.955e-01	$ &$185.232	$\\\midrule
 \end{tabular}
 \end{center}
 \end{table}
