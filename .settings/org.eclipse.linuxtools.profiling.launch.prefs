@@ -1,0 +1,5 @@
+eclipse.preferences.version=1
+providertiming=org.eclipse.linuxtools.profiling.provider.timing.gprof
+use_projectcoverage=true
+use_projectmemory=true
+use_projecttiming=true
