@@ -8,6 +8,9 @@
 #include <gsl/gsl_spblas.h>
 #include <gsl/gsl_rng.h>
 
+//defining if we are using kac-sylvester matrices or random matrices
+#define KAC false
+
 //macro for convergence of power method
 #define POWER_CONV 2
 //macro for no convergence of power method
@@ -19,9 +22,9 @@
 
 void fill_spmatrix_kac(gsl_spmatrix*);
 void fill_spmatrix_random(gsl_spmatrix* m, gsl_rng* rng);
-int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit, double prec, unsigned* iter);
+int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit, double prec, unsigned* iter, double *rnormd);
 double max_mag(gsl_vector* v);
-bool check_stop(gsl_vector* v, gsl_vector* vv, gsl_vector* vvv, double prec);
+bool check_stop(gsl_vector* v, gsl_vector* vv, gsl_vector* vvv, double prec, double *rnormd);
 void save_table(char const* filename, double** table, unsigned size1, unsigned size2, char const* format, bool latex);
 void fast_square_trid_triplet(gsl_spmatrix const* m, gsl_spmatrix** mm);
 void fast_square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm);
@@ -38,6 +41,7 @@ int main(){
 	gsl_rng *tausrng;
 	//The choosen seed
 	const long int seed = 33275;
+	//const long int seed = clock();
 
 	//Configuring the random number generator as Taus
 	my_rng_type = gsl_rng_taus;
@@ -45,9 +49,9 @@ int main(){
 	gsl_rng_set(tausrng, seed);
 
 	//Tridiagonal matrices dimensions. This is useful for determining the nnz for each matrix
-	unsigned const sp_trid_n[] = {500, 1000, 5000, 10000};
+	unsigned const sp_trid_n[] = {100, 300, 500, 700, 1000};
 	//Storing the number of different matrix sizes we will test (the size of array sp_trid_n)
-	unsigned const n_sp_trid_n = 4;
+	unsigned const n_sp_trid_n = 5;
 
 	//Average iterations for estimates
 	double iter_array[n_sp_trid_n], miter_array[n_sp_trid_n];
@@ -88,10 +92,13 @@ int main(){
 		//Not needed anymore because of the function square_trid
 		//mm = gsl_spmatrix_alloc_nzmax(sp_trid_n[i], sp_trid_n[i], pentnnz, GSL_SPMATRIX_CCS);
 
-		//Fill the matrix entries to be a Kac-Sylvester-Clement matrix
-		//fill_spmatrix_kac(mcrs);
-		//Fill the matrix entries to be a tridiagonal matrix
-		fill_spmatrix_random(mcrs, tausrng);
+		if(KAC){
+			//Fill the matrix entries to be a Kac-Sylvester-Clement matrix
+			fill_spmatrix_kac(mcrs);
+		} else {
+			//Fill the matrix entries to be a tridiagonal matrix
+			fill_spmatrix_random(mcrs, tausrng);
+		}
 
 		//Converting m to CRS format
 		tempm = mcrs;
@@ -114,6 +121,7 @@ int main(){
 			//Auxiliary variables used for getting the number of iterations and the eigenvalue estimate
 			double lambda = 0.0;
 			unsigned iter = 0;
+			double rnormd = 0.0;
 
 			//Setting the initial values of v that are stored in _V
 			gsl_vector_memcpy(v, _v);
@@ -122,11 +130,18 @@ int main(){
 			 * of a matrix
 			 */
 			time_beg = clock();
-			power_method(mcrs, v, &lambda, MAXITE, symprec, &iter);
+			power_method(mcrs, v, &lambda, MAXITE, symprec, &iter, &rnormd);
 			time_end = clock();
 			times_array[i]+=1000*(time_end-time_beg)/(double)CLOCKS_PER_SEC;
 			iter_array[i]+=iter;
-			lambdas_array[i]+=fabs((lambda-(sp_trid_n[i]-1))/(sp_trid_n[i]-1));
+			//If we are using Kac-Sylvester matrices, the epsilon is the relative difference with the
+			//estimated eigenvalue and the theoretical value, otherwise, it is the relative norm of the
+			//last consecutive eingenvectors
+			if(KAC){
+				lambdas_array[i]+=fabs((lambda-(sp_trid_n[i]-1))/(sp_trid_n[i]-1));
+			} else {
+				lambdas_array[i]+=rnormd;
+			}
 
 			//Resetting all the elements of v to the same initial guess as for usual power method.
 			gsl_vector_memcpy(v, _v);
@@ -135,31 +150,53 @@ int main(){
 			 * of a matrix
 			 */
 
+			//Measuring the time for the square in TRIPLET format
 			gsl_spmatrix* testmm = NULL;
 			sqr_time_beg = clock();
 			fast_square_trid_triplet(mcrs, &testmm);
 			sqr_time_end = clock();
 			sqr_tri_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
+			//Deallocating the memory used to store the square matrix
+			gsl_spmatrix_free(testmm);
 
+
+			//Measuring the time for the square in CCS format with the dgemm function
 			sqr_time_beg = clock();
 			gemmccs = gsl_spmatrix_alloc_nzmax(sp_trid_n[i], sp_trid_n[i], 5*sp_trid_n[i]-4, GSL_SPMATRIX_CCS);
 			gsl_spblas_dgemm(1, mccs, mccs, gemmccs);
 			sqr_time_end = clock();
 			gemm_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
 			times_square[i][1]+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
+			//Deallocating the memory used to store the square matrix
+			gsl_spmatrix_free(gemmccs);
 
-			time_beg = clock();
+
+			//Measuring the time for the square in CRS format
 			sqr_time_beg = clock();
 			fast_square_trid(mcrs, &mmcrs);
 			sqr_time_end = clock();
 			sqr_crs_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
 			times_square[i][2]+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
-			power_method(mmcrs, v, &lambda, MAXITE, symprec, &iter);
-			time_end = clock();
+			//Deallocating the memory used to store the square matrix
+			gsl_spmatrix_free(mmcrs);
 
+			//Measuring the time for the square in CCS format
+			time_beg = clock();
 			sqr_time_beg = clock();
 			fast_square_trid(mccs, &mmccs);
 			sqr_time_end = clock();
+			power_method(mmccs, v, &lambda, MAXITE, symprec, &iter, &rnormd);
+			time_end = clock();
+			mtimes_array[i]+=1000*(time_end-time_beg)/(double)CLOCKS_PER_SEC;
+			miter_array[i]+=iter;
+			//If we are using Kac-Sylvester matrices, the epsilon is the relative difference with the
+			//estimated eigenvalue and the theoretical value, otherwise, it is the relative norm of the
+			//last consecutive eingenvectors
+			if(KAC){
+				mlambdas_array[i]+=fabs((sqrt(lambda)-(sp_trid_n[i]-1))/(sp_trid_n[i]-1));
+			} else {
+				mlambdas_array[i]+=rnormd;
+			}
 			sqr_ccs_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
 			times_square[i][3]+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
 
@@ -171,15 +208,12 @@ int main(){
 				gsl_spmatrix_fprintf(stdout, mmccs, "%.02f");
 				exit(1);
 			}
-			gsl_spmatrix_free(gemmccs);
-
-			gsl_spmatrix_free(testmm);
-
 			//Deallocating the memory used to store the square matrix
-			gsl_spmatrix_free(mmcrs);
-			mtimes_array[i]+=1000*(time_end-time_beg)/(double)CLOCKS_PER_SEC;
-			miter_array[i]+=iter;
-			mlambdas_array[i]+=fabs((sqrt(lambda)-(sp_trid_n[i]-1))/(sp_trid_n[i]-1));
+			gsl_spmatrix_free(mmccs);
+
+
+
+
 		}
 
 		//Computing the average values for time, number of iterations and estimate error
@@ -195,6 +229,12 @@ int main(){
 		gsl_spmatrix_free(tempm);
 		gsl_vector_free(v);
 		gsl_vector_free(_v);
+	}
+
+	if(KAC){
+		printf("\n\n**************Using Kac-Sylvester matrices.****************\n\n");
+	} else {
+		printf("\n\n**************Using random matrices.****************\n\n");
 	}
 
 	printf("\n\n*****The statistics for the usual method*****\n\n");
@@ -221,37 +261,29 @@ int main(){
 	//Forming table to be printed through save_table function based on the measures for the usual Power method
 	double** measures_table = new double*[n_sp_trid_n];
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
-		measures_table[i] = new double [4];
+		measures_table[i] = new double [8];
 		//Setting the content of each row of the table to be print
 		measures_table[i][0] = sp_trid_n[i];
 		measures_table[i][1] = iter_array[i];
-		measures_table[i][2] = lambdas_array[i];
-		measures_table[i][3] = times_array[i];
+		measures_table[i][2] = times_array[i];
+		measures_table[i][3] = lambdas_array[i];
+		measures_table[i][4] = miter_array[i];
+		measures_table[i][5] = mtimes_array[i];
+		measures_table[i][6] = mlambdas_array[i];
+		measures_table[i][7] = times_array[i]/mtimes_array[i];
 	}
 
+	//Saving the measures: size, iterations, time, error for usual and modified in the same file to be used in the paper
 	//File name
-	char filename_times[] = "measures_times.txt";
+	char filename_complete_measures[] = "complete_measures.txt";
+	//Printing the table measures_table
+	save_table(filename_complete_measures, measures_table, n_sp_trid_n, 8, "%.0f%.2f%.2f%.2e%.2f%.2f%.2e%.2f", true);
+
+	//Saving the times required for squaring the matrices
+	//File name
+	char filename_squaring_times[] = "squaring_times.txt";
 	//Printing the table times_square
-	save_table(filename_times, times_square, n_sp_trid_n, 4, "%.0f%.3f%.3f%.3f", true);
-
-	//File name
-	char filename_usual[] = "measures_usual.txt";
-	//Printing the table measures_table
-	save_table(filename_usual, measures_table, n_sp_trid_n, 4, "%.0f%.0f%.3e%.3f", true);
-
-	//Forming table to be printed through save_table function based on the measures for the modified Power method
-	for(unsigned i = 0; i < n_sp_trid_n; i++){
-		//Setting the content of each row of the table to be print
-		measures_table[i][0] = sp_trid_n[i];
-		measures_table[i][1] = miter_array[i];
-		measures_table[i][2] = mlambdas_array[i];
-		measures_table[i][3] = mtimes_array[i];
-	}
-	//File name
-	char filename_modified[] = "measures_modified.txt";
-
-	//Printing the table measures_table
-	save_table(filename_modified, measures_table, n_sp_trid_n, 4, "%.0f%.0f%.3e%.3f", true);
+	save_table(filename_squaring_times, times_square, n_sp_trid_n, 4, "%.0f%.3f%.3f%.3f", true);
 
 	//Freeing all the allocated memory for printing the table
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
@@ -319,7 +351,7 @@ void fill_spmatrix_random(gsl_spmatrix* m, gsl_rng* rng){
 	gsl_spmatrix_set(m, nrows-1, nrows-1, mulc*gsl_rng_uniform(rng));
 }
 
-int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit, double prec, unsigned* iter){
+int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit, double prec, unsigned* iter, double *rnormd){
 	/*Input:
 	 * m is a gsl_spmatrix
 	 * v is a gsl_vector representing the initial guess for the eigenvector associated with the
@@ -375,7 +407,7 @@ int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit,
 		*lambda = max_mag(v);
 
 		//Stopping criteria
-		if(check_stop(v, vv, vvv, prec)){
+		if(check_stop(v, vv, vvv, prec, rnormd)){
 			//if the returned value is true, leave the loop
 			outputflag = POWER_CONV;
 			break;
@@ -421,12 +453,13 @@ double max_mag(gsl_vector* v){
 	return maxv;
 }
 
-bool check_stop(gsl_vector* v, gsl_vector* vv, gsl_vector* vvv, double prec){
+bool check_stop(gsl_vector* v, gsl_vector* vv, gsl_vector* vvv, double prec, double *rnormd){
 	/*Input:
 	 * v is a gsl_vector
 	 * vv is a gsl_vector
 	 * vvv is a gsl_vector
 	 * prec is a double
+	 * rnormd is a pointer for double
 	 */
 	/*Output:
 	 *flag is a bool
@@ -461,6 +494,9 @@ bool check_stop(gsl_vector* v, gsl_vector* vv, gsl_vector* vvv, double prec){
 
 	//Assigning the value of the output variable
 	((normvvd/normv <= prec)||(normvvvd/normv <= prec))?flagstop=true:flagstop=false;
+
+	//Assinging the relative norm of the difference between the last two eigenvector estimates
+	*rnormd = normvvd/normv;
 
 	return flagstop;
 

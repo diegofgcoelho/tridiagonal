@@ -1,0 +1,14 @@
+% add the booktabs package in the main latex file
+\begin{table}
+\begin{center}
+\caption{write your caption here}
+\label{write your label here}
+\begin{tabular}{
+$100	$ &$0.650	$ &$0.287	$ &$0.261	$\\\midrule
+$300	$ &$1.322	$ &$0.555	$ &$0.499	$\\\midrule
+$500	$ &$2.110	$ &$0.840	$ &$0.780	$\\\midrule
+$700	$ &$3.101	$ &$1.140	$ &$1.091	$\\\midrule
+$1000	$ &$5.005	$ &$1.539	$ &$1.408	$\\\midrule
+\end{tabular}
+\end{center}
+\end{table}
