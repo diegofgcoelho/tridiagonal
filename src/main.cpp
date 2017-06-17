@@ -40,7 +40,7 @@ int main(){
 	const gsl_rng_type *my_rng_type;
 	gsl_rng *tausrng;
 	//The choosen seed
-	const long int seed = 33275;
+	const long int seed = 33274;
 	//const long int seed = clock();
 
 	//Configuring the random number generator as Taus
@@ -49,7 +49,7 @@ int main(){
 	gsl_rng_set(tausrng, seed);
 
 	//Tridiagonal matrices dimensions. This is useful for determining the nnz for each matrix
-	unsigned const sp_trid_n[] = {100, 300, 500, 700, 1000};
+	unsigned const sp_trid_n[] = {1000, 10000, 100000, 500000, 1000000};//{100, 300, 500, 700, 1000};
 	//Storing the number of different matrix sizes we will test (the size of array sp_trid_n)
 	unsigned const n_sp_trid_n = 5;
 
@@ -83,7 +83,7 @@ int main(){
 	double gemm_time=0.0, sqr_tri_time=0.0, sqr_crs_time=0.0, sqr_ccs_time=0.0;
 
 	//The number of replicates
-	unsigned const rep = 100;
+	unsigned const rep = 1000;
 
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
 		//Allocating memory for the tridiagonal matrix. Note: all the elements are set to zero
@@ -115,6 +115,8 @@ int main(){
 		}
 		//Alternate initialization for testing and comparison with matlab/octave
 		//gsl_vector_set_all(v, 1.0);
+
+		std::cout << "We are in size " << sp_trid_n[i] << "." << std::endl;
 
 		//Run over all replicates for matrix size sp_tridi_n[i]
 		for (unsigned j = 0; j < rep; ++j) {
