@@ -1,12 +1,19 @@
 #include <cstdio>
 #include <ctime>
 #include <iostream>
+#include <fstream>
 #include <algorithm>
 #include <ctime>
-#include <cstring>
+#include <complex>
+#include <string>
+#include <sstream>
+
 #include <gsl/gsl_spmatrix.h>
 #include <gsl/gsl_spblas.h>
 #include <gsl/gsl_rng.h>
+#include <gsl/gsl_complex.h>
+#include <gsl/gsl_complex_math.h>
+#include <gsl/gsl_vector_complex.h>
 
 //defining if we are using kac-sylvester matrices or random matrices
 #define KAC false
@@ -23,8 +30,11 @@
 void fill_spmatrix_kac(gsl_spmatrix*);
 void fill_spmatrix_random(gsl_spmatrix* m, gsl_rng* rng);
 int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit, double prec, unsigned* iter, double *rnormd);
+int power_method_cmp(gsl_spmatrix *m, gsl_vector_complex *v, gsl_complex* lambda, unsigned maxit, double prec, unsigned* iter, double *rnormd);
 double max_mag(gsl_vector* v);
+gsl_complex max_mag_cmp(gsl_vector_complex* v);
 bool check_stop(gsl_vector* v, gsl_vector* vv, gsl_vector* vvv, double prec, double *rnormd);
+bool check_stop_cmp(gsl_vector_complex* v, gsl_vector_complex* vv, gsl_vector_complex* vvv, double prec, double *rnormd);
 void save_table(char const* filename, double** table, unsigned size1, unsigned size2, char const* format, bool latex);
 void fast_square_trid_triplet(gsl_spmatrix const* m, gsl_spmatrix** mm);
 void fast_square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm);
@@ -40,16 +50,17 @@ int main(){
 	const gsl_rng_type *my_rng_type;
 	gsl_rng *tausrng;
 	//The choosen seed
-	const long int seed = 33274;
-	//const long int seed = clock();
+	//const long int seed = 33271;
+	const long int seed = clock();
 
 	//Configuring the random number generator as Taus
 	my_rng_type = gsl_rng_taus;
 	tausrng = gsl_rng_alloc(my_rng_type);
 	gsl_rng_set(tausrng, seed);
 
+
 	//Tridiagonal matrices dimensions. This is useful for determining the nnz for each matrix
-	unsigned const sp_trid_n[] = {1000, 10000, 100000, 500000, 1000000};//{100, 300, 500, 700, 1000};
+	unsigned const sp_trid_n[] = {100, 300, 500, 700, 1000};//{1000, 10000, 100000, 500000, 1000000};//{100, 300, 500, 700, 1000};
 	//Storing the number of different matrix sizes we will test (the size of array sp_trid_n)
 	unsigned const n_sp_trid_n = 5;
 
@@ -57,14 +68,17 @@ int main(){
 	double iter_array[n_sp_trid_n], miter_array[n_sp_trid_n];
 	std::fill_n(&iter_array[0], n_sp_trid_n, 0);
 	std::fill_n(&miter_array[0], n_sp_trid_n, 0);
+
 	//Eigenvalue estimates
 	double lambdas_array[n_sp_trid_n], mlambdas_array[n_sp_trid_n];
 	std::fill_n(&lambdas_array[0], n_sp_trid_n, 0);
 	std::fill_n(&mlambdas_array[0], n_sp_trid_n, 0);
+
 	//Average times for estimates
 	double times_array[n_sp_trid_n], mtimes_array[n_sp_trid_n];
 	std::fill_n(&times_array[0], n_sp_trid_n, 0);
 	std::fill_n(&mtimes_array[0], n_sp_trid_n, 0);
+
 	//Total times for squaring (gsl_spmatrix_dgemm, fast_square_trid for CRS and CCS formats, respectively)
 	double** times_square = new double*[n_sp_trid_n];
 	for(unsigned int i = 0; i < n_sp_trid_n; i++){
@@ -74,7 +88,7 @@ int main(){
 		times_square[i][0] = sp_trid_n[i];
 	}
 
-	//The precision used for simulation
+	//The precision used by the power method
 	double symprec = 1e-3;
 
 	//Auxiliary variables for counting the time
@@ -86,11 +100,19 @@ int main(){
 	unsigned const rep = 1000;
 
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
+
+		//Defining the file name that will contain the times
+		std::string dataname("timesN");
+		std::string mdataname("mtimesN");
+		std::stringstream Nss;
+		Nss << sp_trid_n[i];
+		dataname = dataname+Nss.str()+".txt";
+		mdataname = mdataname+Nss.str()+".txt";
+		std::ofstream datafile(dataname);
+		std::ofstream mdatafile(mdataname);
+
 		//Allocating memory for the tridiagonal matrix. Note: all the elements are set to zero
 		mcrs = gsl_spmatrix_alloc_nzmax(sp_trid_n[i], sp_trid_n[i], 3*sp_trid_n[i]-2, GSL_SPMATRIX_TRIPLET);
-		//Allocating memory for the square of the tridiagonal matrix. Note: all the elements are set to zero
-		//Not needed anymore because of the function square_trid
-		//mm = gsl_spmatrix_alloc_nzmax(sp_trid_n[i], sp_trid_n[i], pentnnz, GSL_SPMATRIX_CCS);
 
 		if(KAC){
 			//Fill the matrix entries to be a Kac-Sylvester-Clement matrix
@@ -107,11 +129,11 @@ int main(){
 		mccs = gsl_spmatrix_ccs(tempm);
 
 		//Auxiliary variable representing the initial guess for the matrix eigenvector
-		gsl_vector* v = gsl_vector_alloc(sp_trid_n[i]);
-		gsl_vector* _v = gsl_vector_alloc(sp_trid_n[i]);
+		gsl_vector_complex* v = gsl_vector_complex_alloc(sp_trid_n[i]);
+		gsl_vector_complex* _v = gsl_vector_complex_alloc(sp_trid_n[i]);
 		//Initiating all the elements of v
 		for(unsigned j = 0; j < _v->size; j++){
-			gsl_vector_set(_v, j, gsl_rng_uniform(tausrng));
+			gsl_vector_complex_set(_v, j, gsl_complex_rect(gsl_rng_uniform(tausrng), gsl_rng_uniform(tausrng)));
 		}
 		//Alternate initialization for testing and comparison with matlab/octave
 		//gsl_vector_set_all(v, 1.0);
@@ -121,32 +143,38 @@ int main(){
 		//Run over all replicates for matrix size sp_tridi_n[i]
 		for (unsigned j = 0; j < rep; ++j) {
 			//Auxiliary variables used for getting the number of iterations and the eigenvalue estimate
-			double lambda = 0.0;
+			//double lambda = 0.0;
+			gsl_complex lambda = gsl_complex_rect(0.0,0.0);
 			unsigned iter = 0;
 			double rnormd = 0.0;
 
 			//Setting the initial values of v that are stored in _V
-			gsl_vector_memcpy(v, _v);
+			gsl_vector_complex_memcpy(v, _v);
 
 			/*Calling power_method function that returns the estimate for the largest eigenvalue
 			 * of a matrix
 			 */
 			time_beg = clock();
-			power_method(mcrs, v, &lambda, MAXITE, symprec, &iter, &rnormd);
+			power_method_cmp(mcrs, v, &lambda, MAXITE, symprec, &iter, &rnormd);
 			time_end = clock();
 			times_array[i]+=1000*(time_end-time_beg)/(double)CLOCKS_PER_SEC;
 			iter_array[i]+=iter;
+			//Writing the time to the data file
+			datafile.flush();
+			datafile << (double)(1000*(time_end-time_beg)/(double)CLOCKS_PER_SEC) << ";..." << std::endl;
 			//If we are using Kac-Sylvester matrices, the epsilon is the relative difference with the
 			//estimated eigenvalue and the theoretical value, otherwise, it is the relative norm of the
 			//last consecutive eingenvectors
 			if(KAC){
-				lambdas_array[i]+=fabs((lambda-(sp_trid_n[i]-1))/(sp_trid_n[i]-1));
+				gsl_complex ngsl = gsl_complex_rect(sp_trid_n[i]-1, 0.0);
+				lambdas_array[i]+= gsl_complex_abs(gsl_complex_sub(lambda, ngsl))/(sp_trid_n[i]-1);
+				//lambdas_array[i]+=fabs((lambda-(sp_trid_n[i]-1))/(sp_trid_n[i]-1));
 			} else {
 				lambdas_array[i]+=rnormd;
 			}
 
 			//Resetting all the elements of v to the same initial guess as for usual power method.
-			gsl_vector_memcpy(v, _v);
+			gsl_vector_complex_memcpy(v, _v);
 
 			/*Calling power_method function with the matrix square that returns the estimate for the largest eigenvalue
 			 * of a matrix
@@ -169,8 +197,6 @@ int main(){
 			sqr_time_end = clock();
 			gemm_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
 			times_square[i][1]+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
-			//Deallocating the memory used to store the square matrix
-			gsl_spmatrix_free(gemmccs);
 
 
 			//Measuring the time for the square in CRS format
@@ -179,23 +205,25 @@ int main(){
 			sqr_time_end = clock();
 			sqr_crs_time+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
 			times_square[i][2]+=1000*(sqr_time_end-sqr_time_beg)/(double)CLOCKS_PER_SEC;
-			//Deallocating the memory used to store the square matrix
-			gsl_spmatrix_free(mmcrs);
 
 			//Measuring the time for the square in CCS format
 			time_beg = clock();
 			sqr_time_beg = clock();
 			fast_square_trid(mccs, &mmccs);
 			sqr_time_end = clock();
-			power_method(mmccs, v, &lambda, MAXITE, symprec, &iter, &rnormd);
+			power_method_cmp(mmccs, v, &lambda, MAXITE, symprec, &iter, &rnormd);
 			time_end = clock();
 			mtimes_array[i]+=1000*(time_end-time_beg)/(double)CLOCKS_PER_SEC;
 			miter_array[i]+=iter;
+			//Writing the time to the data file
+			mdatafile.flush();
+			mdatafile << (double)(1000*(time_end-time_beg)/(double)CLOCKS_PER_SEC) << ";..." << std::endl;
 			//If we are using Kac-Sylvester matrices, the epsilon is the relative difference with the
 			//estimated eigenvalue and the theoretical value, otherwise, it is the relative norm of the
 			//last consecutive eingenvectors
 			if(KAC){
-				mlambdas_array[i]+=fabs((sqrt(lambda)-(sp_trid_n[i]-1))/(sp_trid_n[i]-1));
+				gsl_complex ngsl = gsl_complex_rect(sp_trid_n[i]-1, 0.0);
+				lambdas_array[i]+= gsl_complex_abs(gsl_complex_sub(lambda, ngsl))/(sp_trid_n[i]-1);
 			} else {
 				mlambdas_array[i]+=rnormd;
 			}
@@ -211,11 +239,11 @@ int main(){
 				exit(1);
 			}
 			//Deallocating the memory used to store the square matrix
+			gsl_spmatrix_free(mmcrs);
+			//Deallocating the memory used to store the square matrix
 			gsl_spmatrix_free(mmccs);
-
-
-
-
+			//Deallocating the memory used to store the square matrix
+			gsl_spmatrix_free(gemmccs);
 		}
 
 		//Computing the average values for time, number of iterations and estimate error
@@ -227,10 +255,13 @@ int main(){
 		mtimes_array[i]/=rep;
 
 		//Free the memory space for the matrices and vectors
-		gsl_spmatrix_free(mcrs);
 		gsl_spmatrix_free(tempm);
-		gsl_vector_free(v);
-		gsl_vector_free(_v);
+		gsl_vector_complex_free(v);
+		gsl_vector_complex_free(_v);
+
+		//Closing the files used to save the data
+		datafile.close();
+		mdatafile.close();
 	}
 
 	if(KAC){
@@ -333,24 +364,26 @@ void fill_spmatrix_random(gsl_spmatrix* m, gsl_rng* rng){
 
 	//Multiplicative constant
 	unsigned const mulc = 100;
+	//Additve constant
+	unsigned const addc = 0;
 
 	//Setting the first row elements
-	gsl_spmatrix_set(m, 0, 0, mulc*gsl_rng_uniform(rng));
-	gsl_spmatrix_set(m, 0, 1, mulc*gsl_rng_uniform(rng));
+	gsl_spmatrix_set(m, 0, 0, addc+mulc*(gsl_rng_uniform(rng)-0.5));
+	gsl_spmatrix_set(m, 0, 1, addc+mulc*(gsl_rng_uniform(rng)-0.5));
 
 	//Setting the elements between the first and last line
 	for(unsigned i = 1; i < nrows-1; i++){
 		//Setting the element at the left of the diagonal element
-		gsl_spmatrix_set(m, i, i-1, mulc*gsl_rng_uniform(rng));
+		gsl_spmatrix_set(m, i, i-1, addc+mulc*(gsl_rng_uniform(rng)-0.5));
 		//Setting the diagonal element
-		gsl_spmatrix_set(m, i, i, mulc*gsl_rng_uniform(rng));
+		gsl_spmatrix_set(m, i, i, addc+mulc*(gsl_rng_uniform(rng)-0.5));
 		//Setting the element at the right of the diagonal element
-		gsl_spmatrix_set(m, i, i+1, mulc*gsl_rng_uniform(rng));
+		gsl_spmatrix_set(m, i, i+1, addc+mulc*(gsl_rng_uniform(rng)-0.5));
 	}
 
 	//Setting the last row elements
-	gsl_spmatrix_set(m, nrows-1, nrows-2, mulc*gsl_rng_uniform(rng));
-	gsl_spmatrix_set(m, nrows-1, nrows-1, mulc*gsl_rng_uniform(rng));
+	gsl_spmatrix_set(m, nrows-1, nrows-2, addc+mulc*(gsl_rng_uniform(rng)-0.5));
+	gsl_spmatrix_set(m, nrows-1, nrows-1, addc+mulc*(gsl_rng_uniform(rng)-0.5));
 }
 
 int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit, double prec, unsigned* iter, double *rnormd){
@@ -430,6 +463,90 @@ int power_method(gsl_spmatrix *m, gsl_vector *v, double* lambda, unsigned maxit,
 	return outputflag;
 }
 
+int power_method_cmp(gsl_spmatrix *m, gsl_vector_complex *v, gsl_complex* lambda, unsigned maxit, double prec, unsigned* iter, double *rnormd){
+	/*Input:
+	 * m is a gsl_spmatrix
+	 * v is a gsl_vector_complex representing the initial guess for the eigenvector associated with the
+	 * largest eigenvalue
+	 * maxit is the maximum number of iterations
+	 * prec is the precision using for the stopping criteria for the vector difference norm
+	 */
+	/*Output:
+	 * v represents the eigenvector associated with the largest eigenvalue
+	 * lambda represents the largest eigenvalue
+	 * iter is the number of iterations used for computing the largest eigenvalue
+	 */
+	/*Requirement:
+	 * m must be initialized and the largest eigenvalue and its eigenvector
+	 * must be real
+	 * v must be non-null
+	 * maxit must be greater than 1
+	 */
+	/*Description: this function returns the largest eigenvalue of the input matrix m using
+	 * power method
+	 */
+
+	//Output variable
+	int outputflag = -100;
+	//Sanity Check: if the maximum number of iteration is invalid, return POWER_NO_ITER
+	if(maxit <= 1){
+		printf("\nError: the maximum number of iterations must be greater than 1.\n");
+		return POWER_NO_ITER;
+	}
+
+	//Temporary and auxiliary variables:
+
+	//Auxiliary variables for eigenvector estimate for stopping criteria
+	gsl_vector_complex* vv = gsl_vector_complex_alloc(v->size); gsl_vector_complex_set_zero(vv);
+	gsl_vector_complex* vvv = gsl_vector_complex_alloc(v->size); gsl_vector_complex_set_zero(vvv);
+
+	//Scaling the initial estimate for the eigenvector
+	*lambda = max_mag_cmp(v);
+	gsl_vector_complex_scale(v, *lambda);
+
+	//Auxiliary variable for counting the number of iterations
+	unsigned i = 0;
+
+	for(i = 0; i < maxit; i++){
+		//Copying the value of vv to vvv
+		gsl_vector_complex_memcpy(vvv, vv);
+		//Copying the value of v to vv
+		gsl_vector_complex_memcpy(vv, v);
+
+		gsl_complex ilambda = gsl_complex_inverse(*lambda);
+
+		//Real and imaginary part with matrix-vector multiplication using BLAS operation
+		gsl_spblas_dgemv(CblasNoTrans, 1.0, m, &gsl_vector_complex_real(vv).vector, 0, &gsl_vector_complex_real(v).vector);
+		gsl_spblas_dgemv(CblasNoTrans, 1.0, m, &gsl_vector_complex_imag(vv).vector, 0, &gsl_vector_complex_imag(v).vector);
+
+		gsl_blas_zscal(ilambda, v);
+
+		//Scaling the initial estimate for the eigenvector
+		*lambda = max_mag_cmp(v);
+
+		//Stopping criteria
+		if(check_stop_cmp(v, vv, vvv, prec, rnormd)){
+			//if the returned value is true, leave the loop
+			outputflag = POWER_CONV;
+			break;
+		}
+	}
+
+	//Passing the number of iterations used
+	*iter = i;
+
+	//Setting outputflag in case of no convergence
+	if(i == maxit){
+		outputflag = POWER_NO_CONV;
+	}
+
+	gsl_vector_complex_free(vv);
+	gsl_vector_complex_free(vvv);
+
+	return outputflag;
+}
+
+
 double max_mag(gsl_vector* v){
 	/*Input:
 	 * m is a gsl_vector
@@ -453,6 +570,35 @@ double max_mag(gsl_vector* v){
 	}
 
 	return maxv;
+}
+
+gsl_complex max_mag_cmp(gsl_vector_complex* v){
+	/*Input:
+	 * m is a gsl_vector_complex
+	 */
+	/*Output:
+	 * maxv is a double
+	 */
+	/*Requirement:
+	 * v must be a non-empty vector
+	 */
+	/*Description: this function returns the absolute value component of
+	 * the largest component
+	 */
+	//Value to be passed to the output
+	double maxv = 0.0;
+	gsl_complex tout = gsl_complex_rect(0.0,0.0);
+
+	for(unsigned i = 0; i < v->size; i++){
+		gsl_complex tt = gsl_vector_complex_get(v, i);
+		double ttabs = gsl_complex_abs(tt);
+		//If ttabs is greater than maxv, update maxv
+		if(ttabs > maxv){
+			maxv = ttabs;
+			tout = tt;
+		}
+	}
+	return tout;
 }
 
 bool check_stop(gsl_vector* v, gsl_vector* vv, gsl_vector* vvv, double prec, double *rnormd){
@@ -503,6 +649,56 @@ bool check_stop(gsl_vector* v, gsl_vector* vv, gsl_vector* vvv, double prec, dou
 	return flagstop;
 
 }
+
+bool check_stop_cmp(gsl_vector_complex* v, gsl_vector_complex* vv, gsl_vector_complex* vvv, double prec, double *rnormd){
+	/*Input:
+	 * v is a gsl_vector_complex
+	 * vv is a gsl_vector_complex
+	 * vvv is a gsl_vector_complex
+	 * prec is a double
+	 * rnormd is a pointer for double
+	 */
+	/*Output:
+	 *flag is a bool
+	 */
+	/*Requirement:
+	 * v and vv must be non-empty vectors and prec must be greater than 0
+	 */
+	/*Description:
+	 * The function compare vv and vvv against v (the current eigenvector estimate) and
+	 * determines if the power method have achieved convergence
+	 */
+
+	//Output variable
+	bool flagstop;
+
+	//Auxiliary variables representing the norms of v, v-vv and v-vvv, respectively
+	double normv = 0.0, normvvd = 0.0, normvvvd = 0.0;
+
+	for(unsigned i = 0; i < v->size; i++){
+		gsl_complex tempv = gsl_vector_complex_get(v,i);
+		gsl_complex tempvv = gsl_vector_complex_get(vv, i);
+		gsl_complex tempvvv = gsl_vector_complex_get(vvv, i);
+
+		normv += gsl_complex_abs2(tempv);//pow(tempv,2);
+		normvvd += gsl_complex_abs2(gsl_complex_sub(tempv,tempvv));
+		normvvvd += gsl_complex_abs2(gsl_complex_sub(tempv,tempvvv));
+	}
+
+	normv = sqrt(normv);
+	normvvd = sqrt(normvvd);
+	normvvvd = sqrt(normvvvd);
+
+	//Assigning the value of the output variable
+	((normvvd/normv <= prec)||(normvvvd/normv <= prec))?flagstop=true:flagstop=false;
+
+	//Assinging the relative norm of the difference between the last two eigenvector estimates
+	*rnormd = normvvd/normv;
+
+	return flagstop;
+
+}
+
 
 void save_table(char const* filename, double** table, unsigned size1, unsigned size2, char const* format, bool latex){
 	/*Input:
@@ -1040,269 +1236,6 @@ bool my_gsl_spmatrix_equal(gsl_spmatrix const* m1, gsl_spmatrix const* m2, doubl
 	return flag;
 }
 
-//void square_trid_ccs(gsl_spmatrix const* m, gsl_spmatrix** mm){
-//	/*Input:
-//	 * m is a pointer for gsl_spmatrixL_SPMATRIX_CCS format
-//	 * mm is a pointer for gsl_spmatrix that will be in GSL_SPMATRIX_CCS format
-//	 */
-//	/*Output
-//	 * mm is the output and represents the matrix square of the input argument m
-//	 */
-//	/*Requirement
-//	 * m must be a square tridiagonal matrix in GSL_SPMATRIX_CCS format in order to the output be correct
-//	 */
-//	/*Description:
-//	 * This function returns the matrix square of the input argument (m) in the memory location pointed by mm. The memory is allocated by
-//	 * the function and must be deallocated by the calling function.
-//	 */
-//
-//	//Note: possible improvement is to remove the update of mm->nz every time a new element is added and just update it at the end.
-//
-//	//Sanity Check
-//	if(m->size1 != m->size2){
-//		printf("\n\nError: the input matrix must be square.\n\n");
-//		return;
-//	}
-//
-//	unsigned msize = m->size1;
-//	//Allocating memory for the output matrix
-//	(*mm) = gsl_spmatrix_alloc_nzmax(msize, msize, 5*msize-4, GSL_SPMATRIX_CCS);
-//
-//	//Sanity Check
-//	if((*mm) == NULL){
-//		printf("\n\nError: memory for the output matrix could not be allocated.\n\n");
-//		return;
-//	}
-//
-//	size_t *mi = m->i;
-//	size_t *mp = m->p;
-//	double *md = m->data;
-//
-//	//Cleaning the entries of *mm->p and setting *mm->nz to zero
-//	std::fill_n(&((*mm)->p[0]), msize+1, 0);
-//	(*mm)->nz = 0;
-//
-//	//Doubles that will always use for storing the elements of each line.
-//	double  data[3][3] = { {0.0} };
-//
-//	//Value used for computing each element
-//	double tempmmv = 0.0;
-//
-//	//Get the elements of the first 3 columns
-//	for(unsigned i = 0; i < 2; i++){
-//		//mi[i] indicate the row
-//
-//		for(unsigned j = mp[i]; j < mp[i+1]; j++){
-//			data[mi[j]][i] = md[j];
-//		}
-//	}
-//	for(unsigned j = mp[2]; j < mp[3]; j++){
-//		data[mi[j]-1][2] = md[j];
-//	}
-//
-//	//Compute the elements of column 0. Note the corrections in accessing all the elements at row 2
-//	double mul1 = data[1][0]*data[0][1];
-//	double mul2 = data[0][2]*data[2][1];
-//	double add1 = data[0][0]+data[1][1];
-//	double add2 = data[1][1]+data[1][2];
-//
-//	//Compute the elements of column 0
-//	tempmmv = pow(data[0][0], 2)+mul1;
-//	if(tempmmv != 0.0){
-//		(*mm)->data[0] = tempmmv;
-//		(*mm)->i[0] = 0;
-//		(*mm)->p[1]++;
-//		(*mm)->nz++;
-//	}
-//	tempmmv = add1*data[1][0];
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = 1;
-//		(*mm)->p[1]++;
-//		(*mm)->nz++;
-//	}
-//	tempmmv = data[1][0]*data[2][1];
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = 2;
-//		(*mm)->p[1]++;
-//		((*mm)->nz)++;
-//	}
-//	//Update the value of the next component of p
-//	(*mm)->p[2] = (*mm)->p[1];
-//
-//	//Compute the elements of column 1
-//	tempmmv = add1*data[0][1];
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = 0;
-//		(*mm)->p[2]++;
-//		((*mm)->nz)++;
-//	}
-//	tempmmv = mul1+pow(data[1][1],2)+mul2;
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = 1;
-//		(*mm)->p[2]++;
-//		((*mm)->nz)++;
-//	}
-//	tempmmv = add2*data[2][1];
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = 2;
-//		(*mm)->p[2]++;
-//		((*mm)->nz)++;
-//	}
-//	tempmmv = data[2][1]*data[2][2];
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = 3;
-//		(*mm)->p[2]++;
-//		(*mm)->nz++;
-//	}
-//	//Update the value of the next component of p
-//	(*mm)->p[3] = (*mm)->p[2];
-//
-//	for (unsigned i = 2; i < msize-2; i++) {
-//		//Update the elements of the temporary matrix data
-//		//Shifting the data already preset in the matrix data
-//		for(unsigned p = 0; p < 3; p++){
-//			for(unsigned k = 0; k < 2; k++){
-//				data[p][k] = data[p][k+1];
-//			}
-//		}
-//		//Set to zero the elements in the last column of data
-//		data[0][2] = 0.0; data[1][2] = 0.0; data[2][2] = 0.0;
-//		//Update the elements in the last column of data, which will contain the elements in the i+1 column in the input matrix m
-//		for(unsigned j = mp[i+1]; j < mp[i+2]; j++){
-//			//Always write in the last column. Note the correction in the row position for the matrix data
-//			data[mi[j]-i][2] = md[j];
-//		}
-//
-//		//Compute auxiliary variables
-//		mul1 = mul2;
-//		mul2 = data[2][1]*data[0][2];
-//		add1 = add2;
-//		add2 = data[1][2]+data[1][1];
-//
-//		//Compute the elements of column i
-//		tempmmv = data[0][0]*data[0][1];
-//		if(tempmmv != 0.0){
-//			(*mm)->data[(*mm)->nz] = tempmmv;
-//			(*mm)->i[(*mm)->nz] = i-2;
-//			(*mm)->p[i+1]++;
-//			(*mm)->nz++;
-//		}
-//		tempmmv = add1*data[0][1];
-//		if(tempmmv != 0.0){
-//			(*mm)->data[(*mm)->nz] = tempmmv;
-//			(*mm)->i[(*mm)->nz] = i-1;
-//			(*mm)->p[i+1]++;
-//			(*mm)->nz++;
-//		}
-//		tempmmv = mul1+pow(data[1][1], 2)+mul2;
-//		if(tempmmv != 0.0){
-//			(*mm)->data[(*mm)->nz] = tempmmv;
-//			(*mm)->i[(*mm)->nz] = i;
-//			(*mm)->p[i+1]++;
-//			(*mm)->nz++;
-//		}
-//		tempmmv = add2*data[2][1];
-//		if(tempmmv != 0.0){
-//			(*mm)->data[(*mm)->nz] = tempmmv;
-//			(*mm)->i[(*mm)->nz] = i+1;
-//			(*mm)->p[i+1]++;
-//			(*mm)->nz++;
-//		}
-//		tempmmv = data[2][1]*data[2][2];
-//		if(tempmmv != 0.0){
-//			(*mm)->data[(*mm)->nz] = tempmmv;
-//			(*mm)->i[(*mm)->nz] = i+2;
-//			(*mm)->p[i+1]++;
-//			(*mm)->nz++;
-//		}
-//		//Update the value of the next component of p
-//		(*mm)->p[i+2] = (*mm)->p[i+1];
-//
-//	}
-//
-//	//Update the elements of the temporary matrix data
-//	//Shifting the data already preset in the matrix data
-//	for(unsigned p = 0; p < 3; p++){
-//		for(unsigned k = 0; k < 2; k++){
-//			data[p][k] = data[p][k+1];
-//		}
-//	}
-//	//Set to zero the elements in the last column of data
-//	data[0][2] = 0.0; data[1][2] = 0.0; data[2][2] = 0.0;
-//	//Update the elements in the last column of data, which will contain the elements in the i+1 column in the input matrix m
-//	for(unsigned j = mp[msize-1]; j < mp[msize]; j++){
-//		//Always write in the last column. Note the correction in the row position for the matrix data
-//		data[mi[j]-msize+3][2] = md[j];
-//	}
-//
-//	//Compute auxiliary variable
-//	mul1 = mul2;
-//	mul2 = data[1][2]*data[2][1];
-//	add1 = add2;
-//	add2 = data[1][1]+data[2][2];
-//
-//	//Compute the elements of column msize-2
-//	tempmmv = data[0][0]*data[0][1];
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = msize-4;
-//		(*mm)->p[msize-1]++;
-//		(*mm)->nz++;
-//	}
-//	tempmmv = add1*data[0][1];
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = msize-3;
-//		(*mm)->p[msize-1]++;
-//		(*mm)->nz++;
-//	}
-//	tempmmv = mul1+pow(data[1][1], 2)+mul2;
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = msize-2;
-//		(*mm)->p[msize-1]++;
-//		(*mm)->nz++;
-//	}
-//	tempmmv = add2*data[2][1];
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = msize-1;
-//		(*mm)->p[msize-1]++;
-//		(*mm)->nz++;
-//	}
-//	//Update the value of the next component of p
-//	(*mm)->p[msize] = (*mm)->p[msize-1];
-//
-//
-//	//Compute elements of column msize-1
-//	tempmmv = data[0][1]*data[1][2];
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = msize-3;
-//		(*mm)->p[msize]++;
-//		(*mm)->nz++;
-//	}
-//	tempmmv = add2*data[1][2];
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = msize-2;
-//		(*mm)->p[msize]++;
-//		(*mm)->nz++;
-//	}
-//	tempmmv = pow(data[2][2],2)+mul2;
-//	if(tempmmv != 0.0){
-//		(*mm)->data[(*mm)->nz] = tempmmv;
-//		(*mm)->i[(*mm)->nz] = msize-1;
-//		(*mm)->p[msize]++;
-//		(*mm)->nz++;
-//	}
-//}
 
 //gsl_spmatrix* my_gsl_spmatrix_triplet(const gsl_spmatrix* m){
 //	/*Input:
