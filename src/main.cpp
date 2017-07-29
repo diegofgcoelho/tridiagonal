@@ -89,7 +89,7 @@ int main(){
 	}
 
 	//The precision used by the power method
-	double symprec = 1e-3;
+	double symprec = 1e-2;
 
 	//Auxiliary variables for counting the time
 	clock_t time_beg, time_end;
