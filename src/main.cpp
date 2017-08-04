@@ -7,6 +7,7 @@
 #include <complex>
 #include <string>
 #include <sstream>
+#include <algorithm>
 
 #include <gsl/gsl_spmatrix.h>
 #include <gsl/gsl_spblas.h>
@@ -38,6 +39,7 @@ bool check_stop_cmp(gsl_vector_complex* v, gsl_vector_complex* vv, gsl_vector_co
 void save_table(char const* filename, double** table, unsigned size1, unsigned size2, char const* format, bool latex);
 void fast_square_trid_triplet(gsl_spmatrix const* m, gsl_spmatrix** mm);
 void fast_square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm);
+inline void insert_m(gsl_spmatrix* m, unsigned int i, unsigned int j, double val);
 bool my_gsl_spmatrix_equal(gsl_spmatrix const* m1, gsl_spmatrix const* m2, double prec);
 //The following functions are not used anymore, but let only for reference
 //void square_trid_ccs(gsl_spmatrix const* m, gsl_spmatrix** mm);
@@ -48,15 +50,16 @@ int main(){
 	gsl_spmatrix *mcrs, *tempm, *mmcrs, *mccs, *gemmccs, *mmccs;
 	//Defining random number generator: Tausworth
 	const gsl_rng_type *my_rng_type;
-	gsl_rng *tausrng;
+	gsl_rng *my_rng;
 	//The choosen seed
 	//const long int seed = 33271;
-	const long int seed = clock();
+	const long int seed = 4356;//5489;
+	//const long int seed = clock();
 
 	//Configuring the random number generator as Taus
-	my_rng_type = gsl_rng_taus;
-	tausrng = gsl_rng_alloc(my_rng_type);
-	gsl_rng_set(tausrng, seed);
+	my_rng_type = gsl_rng_mt19937_1999;//gsl_rng_taus;
+	my_rng = gsl_rng_alloc(my_rng_type);
+	//gsl_rng_set(my_rng, seed);
 
 
 	//Tridiagonal matrices dimensions. This is useful for determining the nnz for each matrix
@@ -89,7 +92,7 @@ int main(){
 	}
 
 	//The precision used by the power method
-	double symprec = 1e-2;
+	double symprec = 1e-3;
 
 	//Auxiliary variables for counting the time
 	clock_t time_beg, time_end;
@@ -100,6 +103,7 @@ int main(){
 	unsigned const rep = 1000;
 
 	for(unsigned i = 0; i < n_sp_trid_n; i++){
+		gsl_rng_set(my_rng, seed);
 
 		//Defining the file name that will contain the times
 		std::string dataname("timesN");
@@ -119,7 +123,7 @@ int main(){
 			fill_spmatrix_kac(mcrs);
 		} else {
 			//Fill the matrix entries to be a tridiagonal matrix
-			fill_spmatrix_random(mcrs, tausrng);
+			fill_spmatrix_random(mcrs, my_rng);
 		}
 
 		//Converting m to CRS format
@@ -133,7 +137,7 @@ int main(){
 		gsl_vector_complex* _v = gsl_vector_complex_alloc(sp_trid_n[i]);
 		//Initiating all the elements of v
 		for(unsigned j = 0; j < _v->size; j++){
-			gsl_vector_complex_set(_v, j, gsl_complex_rect(gsl_rng_uniform(tausrng), gsl_rng_uniform(tausrng)));
+			gsl_vector_complex_set(_v, j, gsl_complex_rect(gsl_rng_uniform(my_rng), gsl_rng_uniform(my_rng)));
 		}
 		//Alternate initialization for testing and comparison with matlab/octave
 		//gsl_vector_set_all(v, 1.0);
@@ -222,8 +226,9 @@ int main(){
 			//estimated eigenvalue and the theoretical value, otherwise, it is the relative norm of the
 			//last consecutive eingenvectors
 			if(KAC){
+				lambda = gsl_complex_sqrt(lambda);
 				gsl_complex ngsl = gsl_complex_rect(sp_trid_n[i]-1, 0.0);
-				lambdas_array[i]+= gsl_complex_abs(gsl_complex_sub(lambda, ngsl))/(sp_trid_n[i]-1);
+				mlambdas_array[i]+= gsl_complex_abs(gsl_complex_sub(lambda, ngsl))/(sp_trid_n[i]-1);
 			} else {
 				mlambdas_array[i]+=rnormd;
 			}
@@ -323,6 +328,8 @@ int main(){
 		delete [] measures_table[i];
 	}
 	delete [] measures_table;
+
+	gsl_rng_free(my_rng);
 
 	return 0;
 }
@@ -680,7 +687,7 @@ bool check_stop_cmp(gsl_vector_complex* v, gsl_vector_complex* vv, gsl_vector_co
 		gsl_complex tempvv = gsl_vector_complex_get(vv, i);
 		gsl_complex tempvvv = gsl_vector_complex_get(vvv, i);
 
-		normv += gsl_complex_abs2(tempv);//pow(tempv,2);
+		normv += gsl_complex_abs2(tempv);
 		normvvd += gsl_complex_abs2(gsl_complex_sub(tempv,tempvv));
 		normvvvd += gsl_complex_abs2(gsl_complex_sub(tempv,tempvvv));
 	}
@@ -690,10 +697,9 @@ bool check_stop_cmp(gsl_vector_complex* v, gsl_vector_complex* vv, gsl_vector_co
 	normvvvd = sqrt(normvvvd);
 
 	//Assigning the value of the output variable
-	((normvvd/normv <= prec)||(normvvvd/normv <= prec))?flagstop=true:flagstop=false;
+	*rnormd = std::min(normvvd/normv, normvvvd/normv);
 
-	//Assinging the relative norm of the difference between the last two eigenvector estimates
-	*rnormd = normvvd/normv;
+	(*rnormd <= prec)?flagstop=true:flagstop=false;
 
 	return flagstop;
 
@@ -990,58 +996,29 @@ void fast_square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm){
 
 	//Compute the elements of row 0
 	tempmmv = pow(data[0][0], 2)+mul1;
-	if(tempmmv != 0.0){
-		(*mm)->data[0] = tempmmv;
-		(*mm)->i[0] = 0;
-		(*mm)->p[1]++;
-		(*mm)->nz++;
-	}
+	insert_m((*mm), 0, 1, tempmmv);
+
 	tempmmv = add1*data[0][1];
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = 1;
-		(*mm)->p[1]++;
-		(*mm)->nz++;
-	}
+	insert_m((*mm), 1, 1, tempmmv);
 	tempmmv = data[0][1]*data[1][2];
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = 2;
-		(*mm)->p[1]++;
-		((*mm)->nz)++;
-	}
+	insert_m((*mm), 2, 1, tempmmv);
+
 	//Update the value of the next component of p
 	(*mm)->p[2] = (*mm)->p[1];
 
 	//Compute the elements of row 1
 	tempmmv = add1*data[1][0];
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = 0;
-		(*mm)->p[2]++;
-		((*mm)->nz)++;
-	}
+	insert_m((*mm), 0, 2, tempmmv);
+
 	tempmmv = mul1+pow(data[1][1],2)+mul2;
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = 1;
-		(*mm)->p[2]++;
-		((*mm)->nz)++;
-	}
+	insert_m((*mm), 1, 2, tempmmv);
+
 	tempmmv = add2*data[1][2];
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = 2;
-		(*mm)->p[2]++;
-		((*mm)->nz)++;
-	}
+	insert_m((*mm), 2, 2, tempmmv);
+
 	tempmmv = data[1][2]*data[2][2];
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = 3;
-		(*mm)->p[2]++;
-		(*mm)->nz++;
-	}
+	insert_m((*mm), 3, 2, tempmmv);
+
 	//Update the value of the next component of p
 	(*mm)->p[3] = (*mm)->p[2];
 
@@ -1069,40 +1046,20 @@ void fast_square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm){
 
 		//Compute the elements of row i
 		tempmmv = data[0][0]*data[1][0];
-		if(tempmmv != 0.0){
-			(*mm)->data[(*mm)->nz] = tempmmv;
-			(*mm)->i[(*mm)->nz] = i-2;
-			(*mm)->p[i+1]++;
-			(*mm)->nz++;
-		}
+		insert_m((*mm), i-2, i+1, tempmmv);
+
 		tempmmv = add1*data[1][0];
-		if(tempmmv != 0.0){
-			(*mm)->data[(*mm)->nz] = tempmmv;
-			(*mm)->i[(*mm)->nz] = i-1;
-			(*mm)->p[i+1]++;
-			(*mm)->nz++;
-		}
+		insert_m((*mm), i-1, i+1, tempmmv);
+
 		tempmmv = mul1+pow(data[1][1], 2)+mul2;
-		if(tempmmv != 0.0){
-			(*mm)->data[(*mm)->nz] = tempmmv;
-			(*mm)->i[(*mm)->nz] = i;
-			(*mm)->p[i+1]++;
-			(*mm)->nz++;
-		}
+		insert_m((*mm), i, i+1, tempmmv);
+
 		tempmmv = add2*data[1][2];
-		if(tempmmv != 0.0){
-			(*mm)->data[(*mm)->nz] = tempmmv;
-			(*mm)->i[(*mm)->nz] = i+1;
-			(*mm)->p[i+1]++;
-			(*mm)->nz++;
-		}
+		insert_m((*mm), i+1, i+1, tempmmv);
+
 		tempmmv = data[1][2]*data[2][2];
-		if(tempmmv != 0.0){
-			(*mm)->data[(*mm)->nz] = tempmmv;
-			(*mm)->i[(*mm)->nz] = i+2;
-			(*mm)->p[i+1]++;
-			(*mm)->nz++;
-		}
+		insert_m((*mm), i+2, i+1, tempmmv);
+
 		//Update the value of the next component of p
 		(*mm)->p[i+2] = (*mm)->p[i+1];
 
@@ -1131,58 +1088,51 @@ void fast_square_trid(gsl_spmatrix const* m, gsl_spmatrix** mm){
 
 	//Compute the elements of row msize-2
 	tempmmv = data[0][0]*data[1][0];
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = msize-4;
-		(*mm)->p[msize-1]++;
-		(*mm)->nz++;
-	}
+	insert_m((*mm), msize-4, msize-1, tempmmv);
+
 	tempmmv = add1*data[1][0];
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = msize-3;
-		(*mm)->p[msize-1]++;
-		(*mm)->nz++;
-	}
+	insert_m((*mm), msize-3, msize-1, tempmmv);
+
 	tempmmv = mul1+pow(data[1][1], 2)+mul2;
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = msize-2;
-		(*mm)->p[msize-1]++;
-		(*mm)->nz++;
-	}
+	insert_m((*mm), msize-2, msize-1, tempmmv);
+
 	tempmmv = add2*data[1][2];
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = msize-1;
-		(*mm)->p[msize-1]++;
-		(*mm)->nz++;
-	}
+	insert_m((*mm), msize-1, msize-1, tempmmv);
+
 	//Update the value of the next component of p
 	(*mm)->p[msize] = (*mm)->p[msize-1];
 
 
 	//Compute elements of row msize-1
 	tempmmv = data[1][0]*data[2][1];
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = msize-3;
-		(*mm)->p[msize]++;
-		(*mm)->nz++;
-	}
+	insert_m((*mm), msize-3, msize, tempmmv);
+
 	tempmmv = add2*data[2][1];
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = msize-2;
-		(*mm)->p[msize]++;
-		(*mm)->nz++;
-	}
+	insert_m((*mm), msize-2, msize, tempmmv);
+
 	tempmmv = pow(data[2][2],2)+mul2;
-	if(tempmmv != 0.0){
-		(*mm)->data[(*mm)->nz] = tempmmv;
-		(*mm)->i[(*mm)->nz] = msize-1;
-		(*mm)->p[msize]++;
-		(*mm)->nz++;
+	insert_m((*mm), msize-1, msize, tempmmv);
+
+}
+
+inline void insert_m(gsl_spmatrix* m, unsigned int i, unsigned int j, double val){
+	/*
+	 * Input:
+	 * m is a gsl_spmatrix
+	 * i is the column (row) position
+	 * j is the row (column) position
+	 * val is the value to be inserted
+	 * Output:
+	 * m with val inserted in column (row) i
+	 * Description:
+	 * This function insert value val in the sparse matrix in CCS (CCR) format in column (row) i and row (column) j. The
+	 * matrix m must be valid (already allocated).
+	 */
+	if(val != 0.0){
+		m->data[m->nz] = val;
+		m->i[m->nz] = i;
+		m->p[j]++;
+		m->nz++;
 	}
 }
 
